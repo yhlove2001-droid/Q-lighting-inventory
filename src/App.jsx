@@ -3,9 +3,11 @@ import {
   Package, LogOut, Plus, Search, X, Edit2, Trash2,
   ArrowDownCircle, ArrowUpCircle, ChevronRight, ChevronLeft, Lock, User,
   ClipboardList, Truck, LayoutDashboard, CalendarDays, CalendarPlus,
-  ShieldCheck, UserCheck, UserX, Check, Clock, RefreshCw, FolderKanban
+  ShieldCheck, UserCheck, UserX, Check, Clock, RefreshCw, FolderKanban,
+  Printer, FileDown
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import * as XLSX from "xlsx";
 import { supabase, usernameToEmail } from "./supabaseClient";
 import {
   fetchMyProfile, fetchAllProfiles, approveProfile, rejectProfile,
@@ -46,6 +48,32 @@ function daysUntil(dateStr) {
   const target = new Date(dateStr + "T00:00:00");
   return Math.round((target - today) / 86400000);
 }
+
+// 특정 DOM 요소만 골라서 인쇄 (index.html의 print-mode-active CSS와 함께 동작)
+function printElementById(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.add("print-target");
+  document.body.classList.add("print-mode-active");
+  const cleanup = () => {
+    el.classList.remove("print-target");
+    document.body.classList.remove("print-mode-active");
+    window.removeEventListener("afterprint", cleanup);
+  };
+  window.addEventListener("afterprint", cleanup);
+  window.print();
+  // afterprint가 지원되지 않는 환경 대비 안전장치
+  setTimeout(cleanup, 4000);
+}
+
+// 표 형태 데이터를 엑셀(.xlsx) 파일로 다운로드
+function exportToExcel(filename, rows) {
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+  XLSX.writeFile(wb, filename);
+}
+
 // 현재 재고: 입고 예정(미래 날짜) 거래는 제외하고 계산
 function computeStockByItem(transactions) {
   const today = todayStr();
@@ -784,6 +812,24 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
     return projects.find((p) => p.id === id)?.name || "";
   }
 
+  function exportInventory() {
+    const rows = filtered.map((it) => {
+      const stock = stockByItem[it.id] || 0;
+      const dates = lastDates[it.id] || {};
+      return {
+        "품목명": it.name,
+        "위치": it.location || "",
+        "단위": it.unit,
+        "현재재고": stock,
+        "최근입고일": dates.lastIn || "",
+        "최근입고수량": dates.lastInQty ?? "",
+        "최근출고일": dates.lastOut || "",
+        "최근출고수량": dates.lastOutQty ?? "",
+      };
+    });
+    exportToExcel(`재고현황_${todayStr()}.xlsx`, rows);
+  }
+
   return (
     <div>
       {notice && (
@@ -809,6 +855,9 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
         <PrimaryButton onClick={() => setShowItemForm(true)}>
           <Plus size={16} /> 새 품목 추가
         </PrimaryButton>
+        <GhostButton onClick={exportInventory}>
+          <FileDown size={15} /> 엑셀로 저장
+        </GhostButton>
       </div>
 
       <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
@@ -1200,15 +1249,15 @@ function ProjectFormModal({ initial, items, onSave, onClose }) {
   const [dueDate, setDueDate] = useState(initial?.dueDate || "");
   const [rows, setRows] = useState(
     initial?.items?.length
-      ? initial.items.map((r) => ({ itemId: r.itemId || "", customName: r.customName || "", qty: r.qty }))
-      : [{ itemId: "", customName: "", qty: 1 }]
+      ? initial.items.map((r) => ({ itemId: r.itemId || "", customName: r.customName || "", qty: r.qty, ordered: !!r.ordered }))
+      : [{ itemId: "", customName: "", qty: 1, ordered: false }]
   );
 
   function updateRow(idx, patch) {
     setRows(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
   }
   function addRow() {
-    setRows([...rows, { itemId: "", customName: "", qty: 1 }]);
+    setRows([...rows, { itemId: "", customName: "", qty: 1, ordered: false }]);
   }
   function removeRow(idx) {
     setRows(rows.filter((_, i) => i !== idx));
@@ -1220,8 +1269,8 @@ function ProjectFormModal({ initial, items, onSave, onClose }) {
       .filter((r) => (r.itemId === "__custom__" ? r.customName.trim() : r.itemId) && Number(r.qty) > 0)
       .map((r) =>
         r.itemId === "__custom__"
-          ? { itemId: null, customName: r.customName.trim(), qty: Number(r.qty) }
-          : { itemId: r.itemId, qty: Number(r.qty) }
+          ? { itemId: null, customName: r.customName.trim(), qty: Number(r.qty), ordered: !!r.ordered }
+          : { itemId: r.itemId, qty: Number(r.qty), ordered: !!r.ordered }
       );
     onSave({
       id: initial?.id || uid(),
@@ -1362,9 +1411,43 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
     setApplying(null);
   }
 
+  async function toggleOrdered(project, rowIdx) {
+    const newItems = project.items.map((r, i) => (i === rowIdx ? { ...r, ordered: !r.ordered } : r));
+    const updated = await updateProject(project.id, { ...project, items: newItems });
+    setProjects(projects.map((p) => (p.id === project.id ? updated : p)));
+  }
+
+  function exportProjects() {
+    const rows = [];
+    for (const p of projects) {
+      if (p.items.length === 0) {
+        rows.push({
+          "프로젝트명": p.name, "발주기한": p.dueDate || "", "상태": p.status === "applied" ? "반영완료" : "대기중",
+          "품목": "", "필요수량": "", "현재재고": "", "발주필요": "", "발주완료": "",
+        });
+        continue;
+      }
+      for (const row of p.items) {
+        const info = itemInfo(row);
+        const stock = row.itemId ? (stockByItem[row.itemId] || 0) : "";
+        const short = row.itemId ? row.qty - stock : "";
+        rows.push({
+          "프로젝트명": p.name, "발주기한": p.dueDate || "", "상태": p.status === "applied" ? "반영완료" : "대기중",
+          "품목": info.name, "필요수량": row.qty, "현재재고": info.custom ? "미등록" : stock,
+          "발주필요": info.custom ? "" : (short > 0 ? `부족 ${short}` : "충분"),
+          "발주완료": row.ordered ? "O" : "",
+        });
+      }
+    }
+    exportToExcel(`프로젝트_${todayStr()}.xlsx`, rows);
+  }
+
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
+        <GhostButton onClick={exportProjects}>
+          <FileDown size={15} /> 엑셀로 저장
+        </GhostButton>
         <PrimaryButton onClick={() => setShowForm(true)}>
           <Plus size={16} /> 새 프로젝트 추가
         </PrimaryButton>
@@ -1379,7 +1462,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
           {projects.map((p) => {
             const applied = p.status === "applied";
             return (
-              <div key={p.id} style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
+              <div key={p.id} id={`project-print-${p.id}`} style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
                 <div style={{ padding: "14px 18px", borderBottom: "1px solid #EEF0F3", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1410,7 +1493,8 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                     </div>
                     {p.note && <div style={{ fontSize: 12.5, color: "#8A93A6", marginTop: 4 }}>{p.note}</div>}
                   </div>
-                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <div className="no-print" style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    <IconBtn title="인쇄" color="#6B7280" onClick={() => printElementById(`project-print-${p.id}`)}><Printer size={14} /></IconBtn>
                     <IconBtn title="수정" color="#6B7280" onClick={() => setEditProject(p)}><Edit2 size={14} /></IconBtn>
                     <IconBtn title="삭제" color="#6B7280" onClick={() => setDeleteTarget(p)}><Trash2 size={14} /></IconBtn>
                   </div>
@@ -1454,9 +1538,22 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                     재고 미등록
                                   </span>
                                 ) : short > 0 ? (
-                                  <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#FCEBEC", color: "#E63946" }}>
-                                    추가 발주 필요 (부족 {short})
-                                  </span>
+                                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={!!row.ordered}
+                                      onChange={() => toggleOrdered(p, idx)}
+                                      className="no-print"
+                                      style={{ width: 14, height: 14, cursor: "pointer" }}
+                                    />
+                                    <span style={{
+                                      padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700,
+                                      background: row.ordered ? "#EAF7F5" : "#FCEBEC",
+                                      color: row.ordered ? "#2A9D8F" : "#E63946",
+                                    }}>
+                                      {row.ordered ? `발주완료 (부족 ${short})` : `추가 발주 필요 (부족 ${short})`}
+                                    </span>
+                                  </label>
                                 ) : (
                                   <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>
                                     충분
@@ -1471,7 +1568,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                   )}
                 </div>
 
-                <div style={{ padding: "0 18px 16px 18px", display: "flex", justifyContent: "flex-end" }}>
+                <div className="no-print" style={{ padding: "0 18px 16px 18px", display: "flex", justifyContent: "flex-end" }}>
                   <PrimaryButton
                     onClick={() => applyProject(p)}
                     disabled={applied || applying === p.id || p.items.length === 0}
@@ -1500,7 +1597,98 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
 }
 
 // ---------- Dashboard tab ----------
-function DashboardTab({ items, transactions, vendors }) {
+// ---------- Dashboard: 월간 일정표 (인쇄 가능) ----------
+function MonthlyScheduleCard({ items, transactions, events }) {
+  const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
+  const year = cursor.getFullYear();
+  const month = cursor.getMonth();
+
+  function itemName(id) {
+    return items.find((i) => i.id === id)?.name || "품목";
+  }
+
+  const dayMap = useMemo(() => {
+    const map = {};
+    for (const t of transactions) {
+      if (!map[t.date]) map[t.date] = { ins: [], outs: [] };
+      if (t.type === "in") map[t.date].ins.push(`${itemName(t.itemId)} ${t.qty}`);
+      else map[t.date].outs.push(`${itemName(t.itemId)} ${t.qty}`);
+    }
+    for (const e of events) {
+      if (!map[e.date]) map[e.date] = { ins: [], outs: [] };
+      if (!map[e.date].evts) map[e.date].evts = [];
+      map[e.date].evts.push(e.title);
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transactions, events, items]);
+
+  function dateStr(d) {
+    const mm = String(month + 1).padStart(2, "0");
+    const dd = String(d).padStart(2, "0");
+    return `${year}-${mm}-${dd}`;
+  }
+
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < firstWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  function prevMonth() { setCursor(new Date(year, month - 1, 1)); }
+  function nextMonth() { setCursor(new Date(year, month + 1, 1)); }
+
+  return (
+    <div id="dashboard-schedule-print" style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", padding: "16px 18px", marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <IconBtn title="이전 달" color="#6B7280" onClick={prevMonth}><ChevronLeft size={15} /></IconBtn>
+          <span style={{ fontWeight: 800, fontSize: 14, color: "#14213D", minWidth: 100, textAlign: "center" }}>
+            {year}년 {month + 1}월 일정표
+          </span>
+          <IconBtn title="다음 달" color="#6B7280" onClick={nextMonth}><ChevronRight size={15} /></IconBtn>
+        </div>
+        <GhostButton className="no-print" onClick={() => printElementById("dashboard-schedule-print")} style={{ padding: "6px 12px", fontSize: 12.5 }}>
+          <Printer size={13} /> 인쇄
+        </GhostButton>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 4 }}>
+        {WEEKDAYS.map((w) => (
+          <div key={w} style={{ textAlign: "center", fontSize: 11, fontWeight: 700, color: "#A2A9B8", padding: "4px 0" }}>{w}</div>
+        ))}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+        {cells.map((d, idx) => {
+          if (d === null) return <div key={idx} />;
+          const ds = dateStr(d);
+          const info = dayMap[ds] || {};
+          const isToday = ds === todayStr();
+          return (
+            <div key={idx} style={{
+              minHeight: 68, border: isToday ? "1.5px solid #14213D" : "1px solid #F1F2F5",
+              borderRadius: 6, padding: "4px 5px", fontSize: 10, overflow: "hidden",
+            }}>
+              <div style={{ fontWeight: isToday ? 900 : 700, fontSize: 11.5, color: "#14213D", marginBottom: 2 }}>{d}</div>
+              {(info.ins || []).slice(0, 2).map((s, i) => <div key={"i" + i} style={{ color: "#2A9D8F" }}>+{s}</div>)}
+              {(info.outs || []).slice(0, 2).map((s, i) => <div key={"o" + i} style={{ color: "#E63946" }}>-{s}</div>)}
+              {(info.evts || []).slice(0, 2).map((s, i) => <div key={"e" + i} style={{ color: "#8E7CC3" }}>{s}</div>)}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "flex", gap: 14, marginTop: 12, fontSize: 11, color: "#6B7280" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: "#2A9D8F", display: "inline-block" }} /> 입고</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: "#E63946", display: "inline-block" }} /> 출고</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: "#8E7CC3", display: "inline-block" }} /> 일정</span>
+      </div>
+    </div>
+  );
+}
+
+function DashboardTab({ items, transactions, vendors, events }) {
   const stockByItem = useMemo(() => computeStockByItem(transactions), [transactions]);
   const lastDates = useMemo(() => computeLastDates(transactions), [transactions]);
 
@@ -1583,6 +1771,8 @@ function DashboardTab({ items, transactions, vendors }) {
           </div>
         ))}
       </div>
+
+      <MonthlyScheduleCard items={items} transactions={transactions} events={events} />
 
       <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", padding: "16px 18px", marginBottom: 20 }}>
         <div style={{ fontWeight: 800, fontSize: 14, color: "#14213D", marginBottom: 4 }}>품목별 평월 대비 현재수량</div>
@@ -1780,13 +1970,35 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
     setEditEvent(null);
   }
 
+  function exportSchedule() {
+    const monthPrefix = `${year}-${String(month + 1).padStart(2, "0")}`;
+    const rows = [];
+    for (const t of transactions) {
+      if (!t.date.startsWith(monthPrefix)) continue;
+      rows.push({
+        "날짜": t.date, "구분": t.type === "in" ? "입고" : "출고",
+        "품목": itemName(t.itemId), "수량": t.qty, "출고종류": t.outType || "",
+        "거래처": vendorName(t.vendorId), "프로젝트": projectName(t.projectId), "비고": t.note || "",
+      });
+    }
+    for (const e of events) {
+      if (!e.date.startsWith(monthPrefix)) continue;
+      rows.push({
+        "날짜": e.date, "구분": "일정", "품목": e.title, "수량": "", "출고종류": "",
+        "거래처": "", "프로젝트": "", "비고": e.note || "",
+      });
+    }
+    rows.sort((a, b) => (a["날짜"] < b["날짜"] ? -1 : 1));
+    exportToExcel(`일정표_${monthPrefix}.xlsx`, rows);
+  }
+
   const selectedTxs = transactions.filter((t) => t.date === selectedDate).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   const selectedEvents = events.filter((e) => e.date === selectedDate);
 
   return (
     <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-start" }}>
-      <div style={{ flex: "2 1 480px", background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: 16, minWidth: 320 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+      <div id="calendar-print-area" style={{ flex: "2 1 480px", background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: 16, minWidth: 320 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <IconBtn title="이전 달" color="#6B7280" onClick={prevMonth}><ChevronLeft size={15} /></IconBtn>
             <span style={{ fontWeight: 800, fontSize: 15, color: "#14213D", minWidth: 110, textAlign: "center" }}>
@@ -1794,7 +2006,15 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
             </span>
             <IconBtn title="다음 달" color="#6B7280" onClick={nextMonth}><ChevronRight size={15} /></IconBtn>
           </div>
-          <GhostButton onClick={goToday} style={{ padding: "6px 12px", fontSize: 12.5 }}>오늘</GhostButton>
+          <div className="no-print" style={{ display: "flex", gap: 6 }}>
+            <GhostButton onClick={goToday} style={{ padding: "6px 12px", fontSize: 12.5 }}>오늘</GhostButton>
+            <GhostButton onClick={exportSchedule} style={{ padding: "6px 12px", fontSize: 12.5 }}>
+              <FileDown size={13} /> 엑셀로 저장
+            </GhostButton>
+            <GhostButton onClick={() => printElementById("calendar-print-area")} style={{ padding: "6px 12px", fontSize: 12.5 }}>
+              <Printer size={13} /> 인쇄
+            </GhostButton>
+          </div>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 4 }}>
@@ -2172,7 +2392,7 @@ export default function App() {
           {loading ? (
             <div style={{ color: "#A2A9B8", fontSize: 13.5 }}>불러오는 중...</div>
           ) : tab === "dashboard" ? (
-            <DashboardTab items={items} transactions={transactions} vendors={vendors} />
+            <DashboardTab items={items} transactions={transactions} vendors={vendors} events={events} />
           ) : tab === "inventory" ? (
             <InventoryTab
               items={items} setItems={setItems}
