@@ -11,5 +11,5 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 // 로그인 아이디를 Supabase Auth가 요구하는 이메일 형식으로 변환
 // (실제 메일을 받을 필요는 없는 내부용 가짜 도메인입니다)
 export function usernameToEmail(username) {
-  return `${username.trim().toLowerCase()}@qlighting.local`;
+  return `${username.trim().toLowerCase()}@qlighting-app.com`;
 }
