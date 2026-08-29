@@ -536,8 +536,21 @@ function TxFormModal({ item, defaultType, vendors, projects = [], initial, onSav
             </Field>
           </div>
           <div style={{ flex: 1 }}>
-            <Field label={type === "in" ? "입고일" : "출고일"} required>
-              <TextInput type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ width: "100%", boxSizing: "border-box" }} />
+            <Field label={type === "in" ? "입고일" : "출고일"}>
+              <div style={{ display: "flex", gap: 6 }}>
+                <TextInput type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ width: "100%", boxSizing: "border-box" }} />
+                {date && (
+                  <button
+                    type="button"
+                    onClick={() => setDate("")}
+                    title="날짜 비우기"
+                    style={{ border: "1px solid #DADFE6", background: "#fff", borderRadius: 6, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#8A93A6", flexShrink: 0 }}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+              <div style={{ fontSize: 11, color: "#A2A9B8", marginTop: 3 }}>비워두면 날짜 없이 저장됩니다</div>
             </Field>
           </div>
         </div>
@@ -1033,7 +1046,12 @@ function ItemHistory({ item, transactions, vendorName, projectName, onEdit, pend
   if (filterTo) filtered = filtered.filter((t) => t.date <= filterTo);
   if (filterType) filtered = filtered.filter((t) => t.type === filterType);
 
-  const sorted = [...filtered].sort((a, b) => (a.date < b.date ? 1 : -1));
+  const sorted = [...filtered].sort((a, b) => {
+    if (!a.date && !b.date) return 0;
+    if (!a.date) return -1;
+    if (!b.date) return 1;
+    return a.date < b.date ? 1 : -1;
+  });
   const hasActiveFilter = !!(filterFrom || filterTo || filterType);
   const visible = hasActiveFilter || showAll ? sorted : sorted.slice(0, HISTORY_PAGE_SIZE);
   const remaining = sorted.length - visible.length;
@@ -1067,8 +1085,10 @@ function ItemHistory({ item, transactions, vendorName, projectName, onEdit, pend
         <>
           {visible.map((t) => (
             <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5 }}>
-              <span style={{ fontFamily: "ui-monospace, monospace", color: "#8A93A6", width: 88 }}>{t.date}</span>
-              {isFutureDate(t.date) && (
+              <span style={{ fontFamily: "ui-monospace, monospace", color: t.date ? "#8A93A6" : "#C4CBD4", width: 88, fontStyle: t.date ? "normal" : "italic" }}>
+                {t.date || "날짜 미정"}
+              </span>
+              {t.date && isFutureDate(t.date) && (
                 <span style={{
                   padding: "2px 8px", borderRadius: 999, fontWeight: 700, fontSize: 11.5,
                   background: "#EAF1FE", color: "#3B82F6",
@@ -1610,6 +1630,7 @@ function MonthlyScheduleCard({ items, transactions, events }) {
   const dayMap = useMemo(() => {
     const map = {};
     for (const t of transactions) {
+      if (!t.date) continue;
       if (!map[t.date]) map[t.date] = { ins: [], outs: [] };
       if (t.type === "in") map[t.date].ins.push(`${itemName(t.itemId)} ${t.qty}`);
       else map[t.date].outs.push(`${itemName(t.itemId)} ${t.qty}`);
@@ -1707,11 +1728,11 @@ function DashboardTab({ items, transactions, vendors, events }) {
 
   const sortedItems = [...items].sort((a, b) => (stockByItem[a.id] || 0) - (stockByItem[b.id] || 0));
 
-  // 품목별 월말 재고 스냅샷 집계 (예정 거래 제외, 실제 발생분만 누적)
+  // 품목별 월말 재고 스냅샷 집계 (예정 거래 제외, 실제 발생분만 누적, 날짜 미정 거래는 제외)
   const itemMonthlyStock = useMemo(() => {
     const byItem = {};
     for (const t of transactions) {
-      if (t.date > today) continue;
+      if (!t.date || t.date > today) continue;
       if (!byItem[t.itemId]) byItem[t.itemId] = {};
       const key = t.date.slice(0, 7);
       const delta = t.type === "in" ? t.qty : -t.qty;
@@ -1735,7 +1756,7 @@ function DashboardTab({ items, transactions, vendors, events }) {
   const hasOtherMonths = useMemo(() => {
     const allKeys = new Set();
     for (const t of transactions) {
-      if (t.date > today) continue;
+      if (!t.date || t.date > today) continue;
       const key = t.date.slice(0, 7);
       if (key !== currentKey) allKeys.add(key);
     }
@@ -1920,6 +1941,7 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
   const dayMap = useMemo(() => {
     const map = {};
     for (const t of transactions) {
+      if (!t.date) continue;
       if (!map[t.date]) map[t.date] = { inCount: 0, outCount: 0 };
       if (t.type === "in") map[t.date].inCount++; else map[t.date].outCount++;
     }
@@ -1974,7 +1996,7 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
     const monthPrefix = `${year}-${String(month + 1).padStart(2, "0")}`;
     const rows = [];
     for (const t of transactions) {
-      if (!t.date.startsWith(monthPrefix)) continue;
+      if (!t.date || !t.date.startsWith(monthPrefix)) continue;
       rows.push({
         "날짜": t.date, "구분": t.type === "in" ? "입고" : "출고",
         "품목": itemName(t.itemId), "수량": t.qty, "출고종류": t.outType || "",

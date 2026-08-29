@@ -105,7 +105,7 @@ export async function fetchTransactions() {
 export async function insertTransaction(t) {
   const { data, error } = await supabase.from("transactions").insert({
     item_id: t.itemId, type: t.type, out_type: t.type === "out" ? t.outType : null,
-    qty: t.qty, date: t.date, vendor_id: t.vendorId || null, project_id: t.projectId || null, note: t.note,
+    qty: t.qty, date: t.date || null, vendor_id: t.vendorId || null, project_id: t.projectId || null, note: t.note,
   }).select().single();
   if (error) throw error;
   return rowToTx(data);
@@ -113,7 +113,7 @@ export async function insertTransaction(t) {
 export async function updateTransaction(id, t) {
   const { data, error } = await supabase.from("transactions").update({
     item_id: t.itemId, type: t.type, out_type: t.type === "out" ? t.outType : null,
-    qty: t.qty, date: t.date, vendor_id: t.vendorId || null, project_id: t.projectId || null, note: t.note,
+    qty: t.qty, date: t.date || null, vendor_id: t.vendorId || null, project_id: t.projectId || null, note: t.note,
   }).eq("id", id).select().single();
   if (error) throw error;
   return rowToTx(data);
