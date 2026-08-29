@@ -17,6 +17,11 @@ import {
 } from "./api";
 
 const OUT_TYPES = ["납품", "샘플", "시연", "A/S"];
+
+// 선반 위치 옵션: A~I동, 각 1~3단 (직접 입력도 가능, 목록 선택도 가능)
+const LOCATION_OPTIONS = "ABCDEFGHI".split("").flatMap((row) =>
+  [1, 2, 3].map((tier) => `${row}-${tier}`)
+);
 const OUT_TYPE_COLORS = {
   "납품": "#2A9D8F",
   "샘플": "#8E7CC3",
@@ -380,7 +385,16 @@ function ItemFormModal({ initial, onSave, onClose }) {
         <div style={{ display: "flex", gap: 12 }}>
           <div style={{ flex: 2 }}>
             <Field label="위치">
-              <TextInput value={location} onChange={(e) => setLocation(e.target.value)} placeholder="예: A동 2층 선반3" style={{ width: "100%", boxSizing: "border-box" }} />
+              <TextInput
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                placeholder="예: A-1 (직접 입력 또는 목록에서 선택)"
+                list="location-options"
+                style={{ width: "100%", boxSizing: "border-box" }}
+              />
+              <datalist id="location-options">
+                {LOCATION_OPTIONS.map((opt) => <option key={opt} value={opt} />)}
+              </datalist>
             </Field>
           </div>
           <div style={{ flex: 1 }}>
@@ -661,9 +675,15 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
   const stockByItem = useMemo(() => computeStockByItem(transactions), [transactions]);
   const lastDates = useMemo(() => computeLastDates(transactions), [transactions]);
 
-  const filtered = items.filter((it) =>
-    (it.name + it.location).toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = items
+    .filter((it) => (it.name + it.location).toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => {
+      // 위치(A-1, A-2, ..., I-9) 기준 알파벳+숫자 자연 정렬. 위치 없는 품목은 맨 뒤로.
+      if (!a.location && !b.location) return 0;
+      if (!a.location) return 1;
+      if (!b.location) return -1;
+      return a.location.localeCompare(b.location, undefined, { numeric: true, sensitivity: "base" });
+    });
 
   async function queueChange(entity, action, targetId, payload, summary) {
     const created = await insertPending({ entity, action, targetId, payload, summary, requestedBy: username });
