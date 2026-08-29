@@ -40,6 +40,12 @@ function todayStr() {
 function isFutureDate(dateStr) {
   return dateStr > todayStr();
 }
+// 오늘부터 dateStr까지 남은 일수 (음수면 지난 날짜)
+function daysUntil(dateStr) {
+  const today = new Date(todayStr() + "T00:00:00");
+  const target = new Date(dateStr + "T00:00:00");
+  return Math.round((target - today) / 86400000);
+}
 // 현재 재고: 입고 예정(미래 날짜) 거래는 제외하고 계산
 function computeStockByItem(transactions) {
   const today = todayStr();
@@ -957,67 +963,120 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
   );
 }
 
+const HISTORY_PAGE_SIZE = 8;
+
 function ItemHistory({ item, transactions, vendorName, projectName, onEdit, pending = [] }) {
-  const sorted = [...transactions].sort((a, b) => (a.date < b.date ? 1 : -1));
-  if (sorted.length === 0) {
+  const [filterFrom, setFilterFrom] = useState("");
+  const [filterTo, setFilterTo] = useState("");
+  const [filterType, setFilterType] = useState(""); // "" | "in" | "out"
+  const [showAll, setShowAll] = useState(false);
+
+  if (transactions.length === 0) {
     return <div style={{ fontSize: 12.5, color: "#A2A9B8" }}>입출고 이력이 없습니다.</div>;
   }
+
   function hasPendingTx(id) {
     return pending.some((p) => p.entity === "transaction" && p.targetId === id);
   }
+
+  let filtered = transactions;
+  if (filterFrom) filtered = filtered.filter((t) => t.date >= filterFrom);
+  if (filterTo) filtered = filtered.filter((t) => t.date <= filterTo);
+  if (filterType) filtered = filtered.filter((t) => t.type === filterType);
+
+  const sorted = [...filtered].sort((a, b) => (a.date < b.date ? 1 : -1));
+  const hasActiveFilter = !!(filterFrom || filterTo || filterType);
+  const visible = hasActiveFilter || showAll ? sorted : sorted.slice(0, HISTORY_PAGE_SIZE);
+  const remaining = sorted.length - visible.length;
+
+  function resetFilters() {
+    setFilterFrom(""); setFilterTo(""); setFilterType(""); setShowAll(false);
+  }
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6, maxWidth: 760 }}>
-      {sorted.map((t) => (
-        <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5 }}>
-          <span style={{ fontFamily: "ui-monospace, monospace", color: "#8A93A6", width: 88 }}>{t.date}</span>
-          {isFutureDate(t.date) && (
-            <span style={{
-              padding: "2px 8px", borderRadius: 999, fontWeight: 700, fontSize: 11.5,
-              background: "#EAF1FE", color: "#3B82F6",
-            }}>
-              예정
-            </span>
-          )}
-          <span style={{
-            padding: "2px 8px", borderRadius: 999, fontWeight: 700, fontSize: 11.5,
-            background: t.type === "in" ? "#EAF7F5" : "#FCEBEC",
-            color: t.type === "in" ? "#2A9D8F" : "#E63946",
-          }}>
-            {t.type === "in" ? "입고" : "출고"}
-          </span>
-          {t.type === "out" && (
-            <span style={{
-              padding: "2px 8px", borderRadius: 999, fontWeight: 700, fontSize: 11.5,
-              background: (OUT_TYPE_COLORS[t.outType] || "#999") + "22",
-              color: OUT_TYPE_COLORS[t.outType] || "#666",
-            }}>
-              {t.outType}
-            </span>
-          )}
-          <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: "#14213D" }}>{t.qty}</span>
-          <span style={{ color: "#6B7280" }}>{vendorName(t.vendorId)}</span>
-          {t.projectId && projectName && projectName(t.projectId) && (
-            <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#EAF1FE", color: "#0EA5E9" }}>
-              {projectName(t.projectId)}
-            </span>
-          )}
-          {t.note && <span style={{ color: "#A2A9B8" }}>· {t.note}</span>}
-          {hasPendingTx(t.id) && (
-            <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>승인대기</span>
-          )}
-          <button
-            onClick={() => onEdit(t)}
-            title="수정"
-            style={{
-              marginLeft: "auto", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 5,
-              width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: "pointer", color: "#6B7280", flexShrink: 0,
-            }}
-          >
-            <Edit2 size={11} />
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 760 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <TextInput type="date" value={filterFrom} onChange={(e) => setFilterFrom(e.target.value)} style={{ padding: "5px 8px", fontSize: 12 }} />
+        <span style={{ color: "#A2A9B8", fontSize: 12 }}>~</span>
+        <TextInput type="date" value={filterTo} onChange={(e) => setFilterTo(e.target.value)} style={{ padding: "5px 8px", fontSize: 12 }} />
+        <Select value={filterType} onChange={(e) => setFilterType(e.target.value)} style={{ padding: "5px 8px", fontSize: 12 }}>
+          <option value="">전체</option>
+          <option value="in">입고만</option>
+          <option value="out">출고만</option>
+        </Select>
+        {hasActiveFilter && (
+          <button onClick={resetFilters} style={{ border: "none", background: "none", color: "#3B82F6", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>
+            필터 초기화
           </button>
-        </div>
-      ))}
+        )}
+        <span style={{ fontSize: 11.5, color: "#A2A9B8", marginLeft: "auto" }}>총 {sorted.length}건</span>
+      </div>
+
+      {sorted.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: "#A2A9B8" }}>조건에 맞는 기록이 없습니다.</div>
+      ) : (
+        <>
+          {visible.map((t) => (
+            <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5 }}>
+              <span style={{ fontFamily: "ui-monospace, monospace", color: "#8A93A6", width: 88 }}>{t.date}</span>
+              {isFutureDate(t.date) && (
+                <span style={{
+                  padding: "2px 8px", borderRadius: 999, fontWeight: 700, fontSize: 11.5,
+                  background: "#EAF1FE", color: "#3B82F6",
+                }}>
+                  예정
+                </span>
+              )}
+              <span style={{
+                padding: "2px 8px", borderRadius: 999, fontWeight: 700, fontSize: 11.5,
+                background: t.type === "in" ? "#EAF7F5" : "#FCEBEC",
+                color: t.type === "in" ? "#2A9D8F" : "#E63946",
+              }}>
+                {t.type === "in" ? "입고" : "출고"}
+              </span>
+              {t.type === "out" && (
+                <span style={{
+                  padding: "2px 8px", borderRadius: 999, fontWeight: 700, fontSize: 11.5,
+                  background: (OUT_TYPE_COLORS[t.outType] || "#999") + "22",
+                  color: OUT_TYPE_COLORS[t.outType] || "#666",
+                }}>
+                  {t.outType}
+                </span>
+              )}
+              <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: "#14213D" }}>{t.qty}</span>
+              <span style={{ color: "#6B7280" }}>{vendorName(t.vendorId)}</span>
+              {t.projectId && projectName && projectName(t.projectId) && (
+                <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#EAF1FE", color: "#0EA5E9" }}>
+                  {projectName(t.projectId)}
+                </span>
+              )}
+              {t.note && <span style={{ color: "#A2A9B8" }}>· {t.note}</span>}
+              {hasPendingTx(t.id) && (
+                <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>승인대기</span>
+              )}
+              <button
+                onClick={() => onEdit(t)}
+                title="수정"
+                style={{
+                  marginLeft: "auto", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 5,
+                  width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center",
+                  cursor: "pointer", color: "#6B7280", flexShrink: 0,
+                }}
+              >
+                <Edit2 size={11} />
+              </button>
+            </div>
+          ))}
+          {!hasActiveFilter && !showAll && remaining > 0 && (
+            <button
+              onClick={() => setShowAll(true)}
+              style={{ alignSelf: "flex-start", border: "1px dashed #DADFE6", background: "#fff", borderRadius: 6, padding: "6px 12px", cursor: "pointer", color: "#6B7280", fontSize: 12, fontWeight: 700 }}
+            >
+              이전 기록 더보기 ({remaining}건)
+            </button>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -1138,6 +1197,7 @@ function VendorsTab({ vendors, setVendors }) {
 function ProjectFormModal({ initial, items, onSave, onClose }) {
   const [name, setName] = useState(initial?.name || "");
   const [note, setNote] = useState(initial?.note || "");
+  const [dueDate, setDueDate] = useState(initial?.dueDate || "");
   const [rows, setRows] = useState(
     initial?.items?.length
       ? initial.items.map((r) => ({ itemId: r.itemId || "", customName: r.customName || "", qty: r.qty }))
@@ -1167,6 +1227,7 @@ function ProjectFormModal({ initial, items, onSave, onClose }) {
       id: initial?.id || uid(),
       name: name.trim(),
       note: note.trim(),
+      dueDate: dueDate || null,
       items: cleanItems,
       status: initial?.status || "pending",
       createdAt: initial?.createdAt || new Date().toISOString(),
@@ -1178,6 +1239,9 @@ function ProjectFormModal({ initial, items, onSave, onClose }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <Field label="프로젝트명" required>
           <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="예: OO현장 조명 설치" autoFocus />
+        </Field>
+        <Field label="발주 기한">
+          <TextInput type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} style={{ width: "100%", boxSizing: "border-box" }} />
         </Field>
         <Field label="비고">
           <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
@@ -1329,6 +1393,20 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                           대기중
                         </span>
                       )}
+                      {p.dueDate && !applied && (() => {
+                        const d = daysUntil(p.dueDate);
+                        const overdue = d < 0;
+                        const soon = d >= 0 && d <= 3;
+                        return (
+                          <span style={{
+                            padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700,
+                            background: overdue ? "#FCEBEC" : soon ? "#FFF3E6" : "#EAF1FE",
+                            color: overdue ? "#E63946" : soon ? "#FB8500" : "#3B82F6",
+                          }}>
+                            {overdue ? `기한 초과 (${-d}일 지남)` : d === 0 ? "오늘 마감" : `D-${d}`} · {p.dueDate}
+                          </span>
+                        );
+                      })()}
                     </div>
                     {p.note && <div style={{ fontSize: 12.5, color: "#8A93A6", marginTop: 4 }}>{p.note}</div>}
                   </div>
@@ -1441,17 +1519,28 @@ function DashboardTab({ items, transactions, vendors }) {
 
   const sortedItems = [...items].sort((a, b) => (stockByItem[a.id] || 0) - (stockByItem[b.id] || 0));
 
-  // 품목별 월 입출고 합계 집계 (예정 거래 제외, 실제 발생분만)
-  const itemMonthTotals = useMemo(() => {
-    const map = {};
+  // 품목별 월말 재고 스냅샷 집계 (예정 거래 제외, 실제 발생분만 누적)
+  const itemMonthlyStock = useMemo(() => {
+    const byItem = {};
     for (const t of transactions) {
       if (t.date > today) continue;
+      if (!byItem[t.itemId]) byItem[t.itemId] = {};
       const key = t.date.slice(0, 7);
-      if (!map[t.itemId]) map[t.itemId] = {};
-      if (!map[t.itemId][key]) map[t.itemId][key] = { in: 0, out: 0 };
-      map[t.itemId][key][t.type] += t.qty;
+      const delta = t.type === "in" ? t.qty : -t.qty;
+      byItem[t.itemId][key] = (byItem[t.itemId][key] || 0) + delta;
     }
-    return map;
+    const result = {};
+    for (const itemId in byItem) {
+      const monthKeys = Object.keys(byItem[itemId]).sort();
+      let cum = 0;
+      const stockByMonth = {};
+      for (const mk of monthKeys) {
+        cum += byItem[itemId][mk];
+        stockByMonth[mk] = cum;
+      }
+      result[itemId] = stockByMonth;
+    }
+    return result;
   }, [transactions, today]);
 
   const currentKey = today.slice(0, 7);
@@ -1467,16 +1556,16 @@ function DashboardTab({ items, transactions, vendors }) {
 
   const itemChartData = items
     .map((it) => {
-      const monthsForItem = itemMonthTotals[it.id] || {};
-      const otherKeys = Object.keys(monthsForItem).filter((k) => k !== currentKey);
-      const avgTotal = otherKeys.length
-        ? Math.round(otherKeys.reduce((s, k) => s + monthsForItem[k].in + monthsForItem[k].out, 0) / otherKeys.length)
+      const stockByMonth = itemMonthlyStock[it.id] || {};
+      const otherKeys = Object.keys(stockByMonth).filter((k) => k !== currentKey);
+      const avgStock = otherKeys.length
+        ? Math.round(otherKeys.reduce((s, k) => s + stockByMonth[k], 0) / otherKeys.length)
         : 0;
-      const curTotal = (monthsForItem[currentKey]?.in || 0) + (monthsForItem[currentKey]?.out || 0);
-      return { name: it.name, 평월평균: avgTotal, 이번달: curTotal };
+      const curStock = stockByItem[it.id] || 0;
+      return { name: it.name, 평월재고: avgStock, 현재수량: curStock };
     })
-    .filter((d) => d.평월평균 > 0 || d.이번달 > 0)
-    .sort((a, b) => b.이번달 - a.이번달);
+    .filter((d) => d.평월재고 !== 0 || d.현재수량 !== 0)
+    .sort((a, b) => b.현재수량 - a.현재수량);
 
   const chartHeight = Math.max(160, itemChartData.length * 40 + 20);
 
@@ -1496,12 +1585,12 @@ function DashboardTab({ items, transactions, vendors }) {
       </div>
 
       <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", padding: "16px 18px", marginBottom: 20 }}>
-        <div style={{ fontWeight: 800, fontSize: 14, color: "#14213D", marginBottom: 4 }}>품목별 평월 대비 이번달 입출고</div>
+        <div style={{ fontWeight: 800, fontSize: 14, color: "#14213D", marginBottom: 4 }}>품목별 평월 대비 현재수량</div>
         <div style={{ fontSize: 11.5, color: "#A2A9B8", marginBottom: 10 }}>
-          평월평균 = 이번달을 제외한 전체 월 평균 (품목별 입고+출고 수량){!hasOtherMonths && " · 비교할 이전 달 데이터 없음"}
+          평월재고 = 이번달을 제외한 각 월 말 재고 수량의 평균, 현재수량 = 지금 시점의 재고{!hasOtherMonths && " · 비교할 이전 달 데이터 없음"}
         </div>
         {itemChartData.length === 0 ? (
-          <div style={{ padding: "24px 0", textAlign: "center", color: "#A2A9B8", fontSize: 13 }}>표시할 입출고 데이터가 없습니다.</div>
+          <div style={{ padding: "24px 0", textAlign: "center", color: "#A2A9B8", fontSize: 13 }}>표시할 재고 데이터가 없습니다.</div>
         ) : (
           <div style={{ width: "100%", maxHeight: 420, overflowY: itemChartData.length > 10 ? "auto" : "visible" }}>
             <div style={{ width: "100%", height: chartHeight }}>
@@ -1512,8 +1601,8 @@ function DashboardTab({ items, transactions, vendors }) {
                   <YAxis dataKey="name" type="category" width={110} tick={{ fontSize: 12, fill: "#4B5563" }} axisLine={false} tickLine={false} />
                   <Tooltip contentStyle={{ fontSize: 12.5, borderRadius: 8, border: "1px solid #EEF0F3" }} />
                   <Legend wrapperStyle={{ fontSize: 12.5 }} />
-                  <Bar dataKey="평월평균" fill="#8A93A6" radius={[0, 5, 5, 0]} maxBarSize={16} />
-                  <Bar dataKey="이번달" fill="#FB8500" radius={[0, 5, 5, 0]} maxBarSize={16} />
+                  <Bar dataKey="평월재고" fill="#8A93A6" radius={[0, 5, 5, 0]} maxBarSize={16} />
+                  <Bar dataKey="현재수량" fill="#FB8500" radius={[0, 5, 5, 0]} maxBarSize={16} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
