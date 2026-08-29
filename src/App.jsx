@@ -45,15 +45,23 @@ function computeStockByItem(transactions) {
   }
   return map;
 }
-// 최근 입고일/출고일: 실제 발생한(오늘 이하) 거래 기준
+// 최근 입고일/출고일: 실제 발생한(오늘 이하) 거래 기준 (해당 거래 id, 수량도 함께 반환)
 function computeLastDates(transactions) {
   const today = todayStr();
   const map = {};
   for (const t of transactions) {
     if (t.date > today) continue;
-    if (!map[t.itemId]) map[t.itemId] = { lastIn: null, lastOut: null };
-    if (t.type === "in" && (!map[t.itemId].lastIn || t.date > map[t.itemId].lastIn)) map[t.itemId].lastIn = t.date;
-    if (t.type === "out" && (!map[t.itemId].lastOut || t.date > map[t.itemId].lastOut)) map[t.itemId].lastOut = t.date;
+    if (!map[t.itemId]) map[t.itemId] = { lastIn: null, lastOut: null, lastInId: null, lastOutId: null, lastInQty: null, lastOutQty: null };
+    if (t.type === "in" && (!map[t.itemId].lastIn || t.date > map[t.itemId].lastIn)) {
+      map[t.itemId].lastIn = t.date;
+      map[t.itemId].lastInId = t.id;
+      map[t.itemId].lastInQty = t.qty;
+    }
+    if (t.type === "out" && (!map[t.itemId].lastOut || t.date > map[t.itemId].lastOut)) {
+      map[t.itemId].lastOut = t.date;
+      map[t.itemId].lastOutId = t.id;
+      map[t.itemId].lastOutQty = t.qty;
+    }
   }
   return map;
 }
@@ -575,6 +583,56 @@ function VendorFormModal({ initial, onSave, onClose }) {
   );
 }
 
+// ---------- Stock adjust modal (현재 재고 빠른 수정) ----------
+function StockAdjustModal({ item, currentStock, onSave, onClose }) {
+  const [target, setTarget] = useState(currentStock);
+  const diff = Number(target) - currentStock;
+
+  function submit() {
+    if (!Number.isFinite(Number(target))) return;
+    if (diff === 0) { onClose(); return; }
+    onSave({
+      id: uid(),
+      itemId: item.id,
+      type: diff > 0 ? "in" : "out",
+      outType: null,
+      qty: Math.abs(diff),
+      date: todayStr(),
+      vendorId: null,
+      note: "재고 수량 직접 조정",
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === "Enter") submit();
+  }
+
+  return (
+    <Modal title={`${item.name} — 재고 조정`} onClose={onClose} width={380}>
+      <div onKeyDown={handleKeyDown} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ fontSize: 12.5, color: "#8A93A6" }}>현재 시스템 재고: <strong style={{ color: "#14213D" }}>{currentStock}{item.unit}</strong></div>
+        <Field label="실제 재고 수량 (목표값)" required>
+          <TextInput type="number" value={target} onChange={(e) => setTarget(e.target.value)} autoFocus style={{ width: "100%", boxSizing: "border-box" }} />
+        </Field>
+        {diff !== 0 && !Number.isNaN(diff) && (
+          <div style={{
+            fontSize: 12.5, padding: "8px 12px", borderRadius: 7,
+            background: diff > 0 ? "#EAF7F5" : "#FCEBEC",
+            color: diff > 0 ? "#2A9D8F" : "#E63946", fontWeight: 700,
+          }}>
+            {diff > 0 ? `입고 ${diff}${item.unit} 기록이 추가됩니다.` : `출고 ${Math.abs(diff)}${item.unit} 기록이 추가됩니다.`}
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+          <GhostButton onClick={onClose}>취소</GhostButton>
+          <PrimaryButton onClick={submit}>조정 반영</PrimaryButton>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function ConfirmDialog({ text, onConfirm, onClose }) {
   return (
     <Modal title="확인" onClose={onClose} width={340}>
@@ -593,6 +651,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
   const [showItemForm, setShowItemForm] = useState(false);
   const [editItem, setEditItem] = useState(null);
   const [txModal, setTxModal] = useState(null); // { item, tx, defaultType }
+  const [adjustModal, setAdjustModal] = useState(null); // { item, currentStock }
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [expandedItem, setExpandedItem] = useState(null);
   const [notice, setNotice] = useState("");
@@ -749,9 +808,61 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                     </td>
                     <td style={{ ...td, color: "#6B7280" }}>{it.location || "-"}</td>
                     <td style={{ ...td, color: "#6B7280" }}>{it.unit}</td>
-                    <td style={{ ...td, textAlign: "right", fontFamily: "ui-monospace, monospace", fontWeight: 800, color: stock < 0 ? "#E63946" : "#14213D" }}>{stock}</td>
-                    <td style={{ ...td, fontFamily: "ui-monospace, monospace", color: "#6B7280" }}>{dates.lastIn || "-"}</td>
-                    <td style={{ ...td, fontFamily: "ui-monospace, monospace", color: "#6B7280" }}>{dates.lastOut || "-"}</td>
+                    <td style={{ ...td, textAlign: "right" }}>
+                      <button
+                        onClick={() => setAdjustModal({ item: it, currentStock: stock })}
+                        title="재고 조정"
+                        style={{
+                          border: "none", background: "none", cursor: "pointer", padding: "2px 4px", borderRadius: 5,
+                          fontFamily: "ui-monospace, monospace", fontWeight: 800, fontSize: 13.5,
+                          color: stock < 0 ? "#E63946" : "#14213D",
+                        }}
+                      >
+                        {stock}
+                      </button>
+                    </td>
+                    <td style={{ ...td, fontFamily: "ui-monospace, monospace", color: "#6B7280" }}>
+                      {dates.lastIn ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <button
+                            onClick={() => setExpandedItem(isOpen ? null : it.id)}
+                            title="입출고 이력 전체보기"
+                            style={{ border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: "inherit", fontSize: "inherit", color: "inherit", textDecoration: "underline dotted" }}
+                          >
+                            {dates.lastIn}
+                            <span style={{ color: "#2A9D8F", fontWeight: 700, marginLeft: 5 }}>+{dates.lastInQty}</span>
+                          </button>
+                          <button
+                            onClick={() => setTxModal({ item: it, tx: transactions.find((t) => t.id === dates.lastInId) })}
+                            title="이 입고 기록 수정"
+                            style={{ border: "none", background: "none", cursor: "pointer", padding: 2, color: "#A2A9B8", display: "flex" }}
+                          >
+                            <Edit2 size={11} />
+                          </button>
+                        </div>
+                      ) : "-"}
+                    </td>
+                    <td style={{ ...td, fontFamily: "ui-monospace, monospace", color: "#6B7280" }}>
+                      {dates.lastOut ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <button
+                            onClick={() => setExpandedItem(isOpen ? null : it.id)}
+                            title="입출고 이력 전체보기"
+                            style={{ border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: "inherit", fontSize: "inherit", color: "inherit", textDecoration: "underline dotted" }}
+                          >
+                            {dates.lastOut}
+                            <span style={{ color: "#E63946", fontWeight: 700, marginLeft: 5 }}>-{dates.lastOutQty}</span>
+                          </button>
+                          <button
+                            onClick={() => setTxModal({ item: it, tx: transactions.find((t) => t.id === dates.lastOutId) })}
+                            title="이 출고 기록 수정"
+                            style={{ border: "none", background: "none", cursor: "pointer", padding: 2, color: "#A2A9B8", display: "flex" }}
+                          >
+                            <Edit2 size={11} />
+                          </button>
+                        </div>
+                      ) : "-"}
+                    </td>
                     <td style={{ ...td, textAlign: "right" }}>
                       <div style={{ display: "inline-flex", gap: 6 }}>
                         <IconBtn title="입고 등록" color="#2A9D8F" onClick={() => setTxModal({ item: it, tx: null, defaultType: "in" })}><ArrowDownCircle size={15} /></IconBtn>
@@ -786,6 +897,14 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
           onSave={saveTx}
           onDelete={txModal.tx ? deleteTx : undefined}
           onClose={() => setTxModal(null)}
+        />
+      )}
+      {adjustModal && (
+        <StockAdjustModal
+          item={adjustModal.item}
+          currentStock={adjustModal.currentStock}
+          onSave={async (tx) => { await saveTx(tx); setAdjustModal(null); }}
+          onClose={() => setAdjustModal(null)}
         />
       )}
       {deleteTarget && (
@@ -1101,8 +1220,12 @@ function DashboardTab({ items, transactions, vendors }) {
                   <td style={{ ...td, color: "#6B7280" }}>{it.location || "-"}</td>
                   <td style={{ ...td, color: "#6B7280" }}>{it.unit}</td>
                   <td style={{ ...td, textAlign: "right", fontFamily: "ui-monospace, monospace", fontWeight: 800, color: stock < 0 ? "#E63946" : "#14213D" }}>{stock}</td>
-                  <td style={{ ...td, fontFamily: "ui-monospace, monospace", color: "#6B7280" }}>{dates.lastIn || "-"}</td>
-                  <td style={{ ...td, fontFamily: "ui-monospace, monospace", color: "#6B7280" }}>{dates.lastOut || "-"}</td>
+                  <td style={{ ...td, fontFamily: "ui-monospace, monospace", color: "#6B7280" }}>
+                    {dates.lastIn ? <>{dates.lastIn} <span style={{ color: "#2A9D8F", fontWeight: 700 }}>+{dates.lastInQty}</span></> : "-"}
+                  </td>
+                  <td style={{ ...td, fontFamily: "ui-monospace, monospace", color: "#6B7280" }}>
+                    {dates.lastOut ? <>{dates.lastOut} <span style={{ color: "#E63946", fontWeight: 700 }}>-{dates.lastOutQty}</span></> : "-"}
+                  </td>
                 </tr>
               );
             })}
