@@ -3,7 +3,7 @@ import {
   Package, LogOut, Plus, Search, X, Edit2, Trash2,
   ArrowDownCircle, ArrowUpCircle, ChevronRight, ChevronLeft, Lock, User,
   ClipboardList, Truck, LayoutDashboard, CalendarDays, CalendarPlus,
-  ShieldCheck, UserCheck, UserX, Check, Clock, RefreshCw
+  ShieldCheck, UserCheck, UserX, Check, Clock, RefreshCw, FolderKanban
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { supabase, usernameToEmail } from "./supabaseClient";
@@ -13,10 +13,11 @@ import {
   fetchItems, insertItem, updateItem, deleteItemRow,
   fetchTransactions, insertTransaction, updateTransaction, deleteTransactionRow,
   fetchEvents, insertEvent, updateEvent, deleteEventRow,
+  fetchProjects, insertProject, updateProject, deleteProjectRow,
   fetchPending, insertPending, deletePendingRow,
 } from "./api";
 
-const OUT_TYPES = ["납품", "샘플", "시연", "A/S"];
+const OUT_TYPES = ["납품", "샘플", "시연", "A/S", "프로젝트"];
 
 // 선반 위치 옵션: A~I동, 각 1~3단 (직접 입력도 가능, 목록 선택도 가능)
 const LOCATION_OPTIONS = "ABCDEFGHI".split("").flatMap((row) =>
@@ -421,12 +422,13 @@ function ItemFormModal({ initial, onSave, onClose }) {
 }
 
 // ---------- Transaction (입출고) form modal ----------
-function TxFormModal({ item, defaultType, vendors, initial, onSave, onDelete, onClose }) {
+function TxFormModal({ item, defaultType, vendors, projects = [], initial, onSave, onDelete, onClose }) {
   const [type, setType] = useState(initial?.type || defaultType || "in");
   const [outType, setOutType] = useState(initial?.outType || OUT_TYPES[0]);
   const [qty, setQty] = useState(initial?.qty ?? 1);
   const [date, setDate] = useState(initial?.date || todayStr());
   const [vendorId, setVendorId] = useState(initial?.vendorId || "");
+  const [projectId, setProjectId] = useState(initial?.projectId || "");
   const [note, setNote] = useState(initial?.note || "");
 
   function submit() {
@@ -439,6 +441,7 @@ function TxFormModal({ item, defaultType, vendors, initial, onSave, onDelete, on
       qty: Number(qty),
       date,
       vendorId: vendorId || null,
+      projectId: type === "out" ? (projectId || null) : null,
       note: note.trim(),
       createdAt: initial?.createdAt || new Date().toISOString(),
     });
@@ -511,6 +514,15 @@ function TxFormModal({ item, defaultType, vendors, initial, onSave, onDelete, on
             {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
           </Select>
         </Field>
+
+        {type === "out" && (
+          <Field label="프로젝트">
+            <Select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+              <option value="">선택 안 함</option>
+              {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </Select>
+          </Field>
+        )}
 
         <Field label="비고">
           <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
@@ -660,7 +672,7 @@ function ConfirmDialog({ text, onConfirm, onClose }) {
 }
 
 // ---------- Inventory tab ----------
-function InventoryTab({ items, setItems, transactions, setTransactions, vendors, role, username, pending, setPending }) {
+function InventoryTab({ items, setItems, transactions, setTransactions, vendors, projects, role, username, pending, setPending }) {
   const [search, setSearch] = useState("");
   const [showItemForm, setShowItemForm] = useState(false);
   const [editItem, setEditItem] = useState(null);
@@ -760,6 +772,10 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
 
   function vendorName(id) {
     return vendors.find((v) => v.id === id)?.name || "-";
+  }
+
+  function projectName(id) {
+    return projects.find((p) => p.id === id)?.name || "";
   }
 
   return (
@@ -895,7 +911,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                   {isOpen && (
                     <tr>
                       <td colSpan={7} style={{ background: "#FAFBFC", padding: "10px 20px 16px 40px", borderTop: "1px solid #F1F2F5" }}>
-                        <ItemHistory item={it} transactions={transactions.filter((t) => t.itemId === it.id)} vendorName={vendorName} onEdit={(tx) => setTxModal({ item: it, tx })} pending={pending} />
+                        <ItemHistory item={it} transactions={transactions.filter((t) => t.itemId === it.id)} vendorName={vendorName} projectName={projectName} onEdit={(tx) => setTxModal({ item: it, tx })} pending={pending} />
                       </td>
                     </tr>
                   )}
@@ -914,6 +930,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
           defaultType={txModal.defaultType}
           initial={txModal.tx}
           vendors={vendors}
+          projects={projects}
           onSave={saveTx}
           onDelete={txModal.tx ? deleteTx : undefined}
           onClose={() => setTxModal(null)}
@@ -940,7 +957,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
   );
 }
 
-function ItemHistory({ item, transactions, vendorName, onEdit, pending = [] }) {
+function ItemHistory({ item, transactions, vendorName, projectName, onEdit, pending = [] }) {
   const sorted = [...transactions].sort((a, b) => (a.date < b.date ? 1 : -1));
   if (sorted.length === 0) {
     return <div style={{ fontSize: 12.5, color: "#A2A9B8" }}>입출고 이력이 없습니다.</div>;
@@ -979,6 +996,11 @@ function ItemHistory({ item, transactions, vendorName, onEdit, pending = [] }) {
           )}
           <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: "#14213D" }}>{t.qty}</span>
           <span style={{ color: "#6B7280" }}>{vendorName(t.vendorId)}</span>
+          {t.projectId && projectName && projectName(t.projectId) && (
+            <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#EAF1FE", color: "#0EA5E9" }}>
+              {projectName(t.projectId)}
+            </span>
+          )}
           {t.note && <span style={{ color: "#A2A9B8" }}>· {t.note}</span>}
           {hasPendingTx(t.id) && (
             <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>승인대기</span>
@@ -1105,6 +1127,256 @@ function VendorsTab({ vendors, setVendors }) {
         <ConfirmDialog
           text={`'${deleteTarget.name}' 거래처를 삭제하시겠습니까?`}
           onConfirm={() => deleteVendor(deleteTarget.id)}
+          onClose={() => setDeleteTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------- Project (프로젝트) form modal ----------
+function ProjectFormModal({ initial, items, onSave, onClose }) {
+  const [name, setName] = useState(initial?.name || "");
+  const [note, setNote] = useState(initial?.note || "");
+  const [rows, setRows] = useState(
+    initial?.items?.length ? initial.items.map((r) => ({ ...r })) : [{ itemId: "", qty: 1 }]
+  );
+
+  function updateRow(idx, patch) {
+    setRows(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  }
+  function addRow() {
+    setRows([...rows, { itemId: "", qty: 1 }]);
+  }
+  function removeRow(idx) {
+    setRows(rows.filter((_, i) => i !== idx));
+  }
+
+  function submit() {
+    if (!name.trim()) return;
+    const cleanItems = rows
+      .filter((r) => r.itemId && Number(r.qty) > 0)
+      .map((r) => ({ itemId: r.itemId, qty: Number(r.qty) }));
+    onSave({
+      id: initial?.id || uid(),
+      name: name.trim(),
+      note: note.trim(),
+      items: cleanItems,
+      status: initial?.status || "pending",
+      createdAt: initial?.createdAt || new Date().toISOString(),
+    });
+  }
+
+  return (
+    <Modal title={initial ? "프로젝트 수정" : "새 프로젝트 추가"} onClose={onClose} width={560}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <Field label="프로젝트명" required>
+          <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="예: OO현장 조명 설치" autoFocus />
+        </Field>
+        <Field label="비고">
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
+        </Field>
+
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#4B5563", marginBottom: 8 }}>필요 장비</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {rows.map((row, idx) => (
+              <div key={idx} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <Select
+                  value={row.itemId}
+                  onChange={(e) => updateRow(idx, { itemId: e.target.value })}
+                  style={{ flex: 3 }}
+                >
+                  <option value="">품목 선택</option>
+                  {items.map((it) => <option key={it.id} value={it.id}>{it.name}{it.location ? ` (${it.location})` : ""}</option>)}
+                </Select>
+                <TextInput
+                  type="number" min={1} value={row.qty}
+                  onChange={(e) => updateRow(idx, { qty: e.target.value })}
+                  style={{ flex: 1, width: "auto" }}
+                />
+                <button
+                  onClick={() => removeRow(idx)}
+                  title="삭제"
+                  style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, width: 30, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#E63946", flexShrink: 0 }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={addRow}
+            style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 5, border: "1px dashed #DADFE6", background: "#fff", borderRadius: 6, padding: "7px 12px", cursor: "pointer", color: "#6B7280", fontSize: 12.5, fontWeight: 700 }}
+          >
+            <Plus size={13} /> 장비 추가
+          </button>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+          <GhostButton onClick={onClose}>취소</GhostButton>
+          <PrimaryButton onClick={submit}>저장</PrimaryButton>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------- Projects tab ----------
+function ProjectsTab({ projects, setProjects, items, transactions, setTransactions, username }) {
+  const [showForm, setShowForm] = useState(false);
+  const [editProject, setEditProject] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [applying, setApplying] = useState(null);
+
+  const stockByItem = useMemo(() => computeStockByItem(transactions), [transactions]);
+
+  function itemInfo(id) {
+    const it = items.find((i) => i.id === id);
+    return { name: it?.name || "삭제된 품목", unit: it?.unit || "EA" };
+  }
+
+  async function saveProject(project) {
+    const exists = projects.some((p) => p.id === project.id);
+    if (exists) {
+      const updated = await updateProject(project.id, project);
+      setProjects(projects.map((p) => (p.id === project.id ? updated : p)));
+    } else {
+      const created = await insertProject(project);
+      setProjects([created, ...projects]);
+    }
+    setShowForm(false);
+    setEditProject(null);
+  }
+
+  async function deleteProject(id) {
+    await deleteProjectRow(id);
+    setProjects(projects.filter((p) => p.id !== id));
+    setDeleteTarget(null);
+  }
+
+  async function applyProject(project) {
+    setApplying(project.id);
+    const today = todayStr();
+    const newTxs = [];
+    for (const row of project.items) {
+      if (!row.qty || row.qty <= 0) continue;
+      const created = await insertTransaction({
+        itemId: row.itemId, type: "out", outType: "프로젝트",
+        qty: row.qty, date: today, vendorId: null, projectId: project.id,
+        note: `${project.name} 프로젝트 반영`,
+      });
+      newTxs.push(created);
+    }
+    setTransactions([...newTxs, ...transactions]);
+    const updated = await updateProject(project.id, { ...project, status: "applied" });
+    setProjects(projects.map((p) => (p.id === project.id ? updated : p)));
+    setApplying(null);
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
+        <PrimaryButton onClick={() => setShowForm(true)}>
+          <Plus size={16} /> 새 프로젝트 추가
+        </PrimaryButton>
+      </div>
+
+      {projects.length === 0 ? (
+        <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", padding: 40, textAlign: "center", color: "#A2A9B8", fontSize: 13.5 }}>
+          등록된 프로젝트가 없습니다.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {projects.map((p) => {
+            const applied = p.status === "applied";
+            return (
+              <div key={p.id} style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
+                <div style={{ padding: "14px 18px", borderBottom: "1px solid #EEF0F3", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontWeight: 800, fontSize: 15, color: "#14213D" }}>{p.name}</span>
+                      {applied ? (
+                        <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>
+                          반영완료{p.appliedAt ? ` · ${p.appliedAt.slice(0, 10)}` : ""}
+                        </span>
+                      ) : (
+                        <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>
+                          대기중
+                        </span>
+                      )}
+                    </div>
+                    {p.note && <div style={{ fontSize: 12.5, color: "#8A93A6", marginTop: 4 }}>{p.note}</div>}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    <IconBtn title="수정" color="#6B7280" onClick={() => setEditProject(p)}><Edit2 size={14} /></IconBtn>
+                    <IconBtn title="삭제" color="#6B7280" onClick={() => setDeleteTarget(p)}><Trash2 size={14} /></IconBtn>
+                  </div>
+                </div>
+
+                <div style={{ padding: "12px 18px" }}>
+                  {p.items.length === 0 ? (
+                    <div style={{ fontSize: 12.5, color: "#A2A9B8" }}>등록된 장비가 없습니다.</div>
+                  ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ color: "#8A93A6", textAlign: "left" }}>
+                          <th style={{ padding: "4px 8px", fontWeight: 700, fontSize: 11.5 }}>품목</th>
+                          <th style={{ padding: "4px 8px", fontWeight: 700, fontSize: 11.5, textAlign: "right" }}>필요 수량</th>
+                          <th style={{ padding: "4px 8px", fontWeight: 700, fontSize: 11.5, textAlign: "right" }}>현재 재고</th>
+                          <th style={{ padding: "4px 8px", fontWeight: 700, fontSize: 11.5 }}>상태</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {p.items.map((row, idx) => {
+                          const info = itemInfo(row.itemId);
+                          const stock = stockByItem[row.itemId] || 0;
+                          const short = row.qty - stock;
+                          return (
+                            <tr key={idx} style={{ borderTop: "1px solid #F1F2F5" }}>
+                              <td style={{ padding: "6px 8px", fontWeight: 600, color: "#14213D" }}>{info.name}</td>
+                              <td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "ui-monospace, monospace" }}>{row.qty} {info.unit}</td>
+                              <td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "ui-monospace, monospace", color: stock < row.qty ? "#E63946" : "#6B7280" }}>{stock} {info.unit}</td>
+                              <td style={{ padding: "6px 8px" }}>
+                                {short > 0 ? (
+                                  <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#FCEBEC", color: "#E63946" }}>
+                                    추가 발주 필요 (부족 {short})
+                                  </span>
+                                ) : (
+                                  <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>
+                                    충분
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+
+                <div style={{ padding: "0 18px 16px 18px", display: "flex", justifyContent: "flex-end" }}>
+                  <PrimaryButton
+                    onClick={() => applyProject(p)}
+                    disabled={applied || applying === p.id || p.items.length === 0}
+                    style={{ opacity: applied || applying === p.id || p.items.length === 0 ? 0.5 : 1, cursor: applied ? "default" : "pointer" }}
+                  >
+                    {applying === p.id ? "반영 중..." : applied ? "반영완료" : "반영"}
+                  </PrimaryButton>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {showForm && <ProjectFormModal items={items} onSave={saveProject} onClose={() => setShowForm(false)} />}
+      {editProject && <ProjectFormModal initial={editProject} items={items} onSave={saveProject} onClose={() => setEditProject(null)} />}
+      {deleteTarget && (
+        <ConfirmDialog
+          text={`'${deleteTarget.name}' 프로젝트를 삭제하시겠습니까? (이미 반영된 출고 기록은 그대로 유지됩니다)`}
+          onConfirm={() => deleteProject(deleteTarget.id)}
           onClose={() => setDeleteTarget(null)}
         />
       )}
@@ -1310,7 +1582,7 @@ function EventFormModal({ initial, defaultDate, onSave, onDelete, onClose }) {
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
 // ---------- Calendar tab ----------
-function CalendarTab({ items, transactions, vendors, events, setEvents }) {
+function CalendarTab({ items, transactions, vendors, projects = [], events, setEvents }) {
   const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
   const [selectedDate, setSelectedDate] = useState(todayStr());
   const [showEventForm, setShowEventForm] = useState(false);
@@ -1324,6 +1596,9 @@ function CalendarTab({ items, transactions, vendors, events, setEvents }) {
   }
   function vendorName(id) {
     return vendors.find((v) => v.id === id)?.name || "";
+  }
+  function projectName(id) {
+    return projects.find((p) => p.id === id)?.name || "";
   }
 
   const dayMap = useMemo(() => {
@@ -1466,7 +1741,7 @@ function CalendarTab({ items, transactions, vendors, events, setEvents }) {
                     <span style={{ fontWeight: 700, color: "#14213D" }}>{itemName(t.itemId)}</span>
                   </div>
                   <div style={{ color: "#6B7280" }}>
-                    수량 {t.qty}{vendorName(t.vendorId) && ` · ${vendorName(t.vendorId)}`}
+                    수량 {t.qty}{vendorName(t.vendorId) && ` · ${vendorName(t.vendorId)}`}{t.projectId && projectName(t.projectId) && ` · ${projectName(t.projectId)}`}
                   </div>
                 </div>
               ))}
@@ -1616,6 +1891,7 @@ export default function App() {
   const [transactions, setTransactions] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [events, setEvents] = useState([]);
+  const [projects, setProjects] = useState([]);
   const [users, setUsers] = useState([]);
   const [pending, setPending] = useState([]);
 
@@ -1637,17 +1913,19 @@ export default function App() {
 
   async function loadAllData(role) {
     setLoading(true);
-    const [i, t, v, e, p] = await Promise.all([
+    const [i, t, v, e, pr, p] = await Promise.all([
       fetchItems(),
       fetchTransactions(),
       fetchVendors(),
       fetchEvents(),
+      fetchProjects(),
       fetchPending(),
     ]);
     setItems(i);
     setTransactions(t);
     setVendors(v);
     setEvents(e);
+    setProjects(pr);
     setPending(p);
     if (role === "admin") {
       const u = await fetchAllProfiles();
@@ -1666,7 +1944,7 @@ export default function App() {
   async function handleLogout() {
     await supabase.auth.signOut();
     setAuthUser(null);
-    setItems([]); setTransactions([]); setVendors([]); setEvents([]); setUsers([]); setPending([]);
+    setItems([]); setTransactions([]); setVendors([]); setEvents([]); setProjects([]); setUsers([]); setPending([]);
     setTab("dashboard");
   }
 
@@ -1693,6 +1971,7 @@ export default function App() {
     { id: "inventory", label: "재고관리", icon: Package },
     { id: "vendors", label: "거래처관리", icon: Truck },
     { id: "calendar", label: "달력", icon: CalendarDays },
+    { id: "projects", label: "프로젝트", icon: FolderKanban },
     ...(isAdmin ? [{ id: "admin", label: "관리자", icon: ShieldCheck, badge: users.filter((u) => u.status === "pending").length + pending.length }] : []),
   ];
 
@@ -1772,7 +2051,7 @@ export default function App() {
             <InventoryTab
               items={items} setItems={setItems}
               transactions={transactions} setTransactions={setTransactions}
-              vendors={vendors}
+              vendors={vendors} projects={projects}
               role={role} username={authUser.username}
               pending={pending} setPending={setPending}
             />
@@ -1780,8 +2059,14 @@ export default function App() {
             <VendorsTab vendors={vendors} setVendors={setVendors} />
           ) : tab === "calendar" ? (
             <CalendarTab
-              items={items} transactions={transactions} vendors={vendors}
+              items={items} transactions={transactions} vendors={vendors} projects={projects}
               events={events} setEvents={setEvents}
+            />
+          ) : tab === "projects" ? (
+            <ProjectsTab
+              projects={projects} setProjects={setProjects}
+              items={items} transactions={transactions} setTransactions={setTransactions}
+              username={authUser.username}
             />
           ) : (
             <AdminTab
