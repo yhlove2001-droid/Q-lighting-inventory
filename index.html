@@ -7,6 +7,18 @@
     <style>
       .spin { animation: qlspin 0.8s linear infinite; }
       @keyframes qlspin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+      /* 특정 영역만 인쇄하기 위한 규칙: 인쇄할 요소에 .print-target 을 붙이고
+         body에 .print-mode-active 를 잠깐 붙였다가 인쇄 후 제거합니다. */
+      @media print {
+        body.print-mode-active * { visibility: hidden !important; }
+        body.print-mode-active .print-target,
+        body.print-mode-active .print-target * { visibility: visible !important; }
+        body.print-mode-active .print-target {
+          position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 12px;
+        }
+        body.print-mode-active .no-print { display: none !important; }
+      }
     </style>
   </head>
   <body>
