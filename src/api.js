@@ -93,7 +93,7 @@ export async function deleteItemRow(id) {
 function rowToTx(r) {
   return {
     id: r.id, itemId: r.item_id, type: r.type, outType: r.out_type || null,
-    qty: Number(r.qty), date: r.date, vendorId: r.vendor_id || null,
+    qty: Number(r.qty), date: r.date, vendorId: r.vendor_id || null, projectId: r.project_id || null,
     note: r.note || "", createdAt: r.created_at,
   };
 }
@@ -105,7 +105,7 @@ export async function fetchTransactions() {
 export async function insertTransaction(t) {
   const { data, error } = await supabase.from("transactions").insert({
     item_id: t.itemId, type: t.type, out_type: t.type === "out" ? t.outType : null,
-    qty: t.qty, date: t.date, vendor_id: t.vendorId || null, note: t.note,
+    qty: t.qty, date: t.date, vendor_id: t.vendorId || null, project_id: t.projectId || null, note: t.note,
   }).select().single();
   if (error) throw error;
   return rowToTx(data);
@@ -113,7 +113,7 @@ export async function insertTransaction(t) {
 export async function updateTransaction(id, t) {
   const { data, error } = await supabase.from("transactions").update({
     item_id: t.itemId, type: t.type, out_type: t.type === "out" ? t.outType : null,
-    qty: t.qty, date: t.date, vendor_id: t.vendorId || null, note: t.note,
+    qty: t.qty, date: t.date, vendor_id: t.vendorId || null, project_id: t.projectId || null, note: t.note,
   }).eq("id", id).select().single();
   if (error) throw error;
   return rowToTx(data);
@@ -148,6 +148,37 @@ export async function updateEvent(id, e) {
 }
 export async function deleteEventRow(id) {
   const { error } = await supabase.from("events").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// ---------- projects (프로젝트) ----------
+function rowToProject(r) {
+  return {
+    id: r.id, name: r.name, note: r.note || "", items: r.items || [],
+    status: r.status, appliedAt: r.applied_at, createdAt: r.created_at,
+  };
+}
+export async function fetchProjects() {
+  const { data, error } = await supabase.from("projects").select("*").order("created_at", { ascending: false });
+  if (error) { console.error(error); return []; }
+  return data.map(rowToProject);
+}
+export async function insertProject(p) {
+  const { data, error } = await supabase.from("projects").insert({
+    name: p.name, note: p.note, items: p.items, status: p.status || "pending",
+  }).select().single();
+  if (error) throw error;
+  return rowToProject(data);
+}
+export async function updateProject(id, p) {
+  const patch = { name: p.name, note: p.note, items: p.items, status: p.status };
+  if (p.status === "applied") patch.applied_at = new Date().toISOString();
+  const { data, error } = await supabase.from("projects").update(patch).eq("id", id).select().single();
+  if (error) throw error;
+  return rowToProject(data);
+}
+export async function deleteProjectRow(id) {
+  const { error } = await supabase.from("projects").delete().eq("id", id);
   if (error) throw error;
 }
 
