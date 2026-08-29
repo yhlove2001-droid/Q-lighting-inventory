@@ -1139,14 +1139,16 @@ function ProjectFormModal({ initial, items, onSave, onClose }) {
   const [name, setName] = useState(initial?.name || "");
   const [note, setNote] = useState(initial?.note || "");
   const [rows, setRows] = useState(
-    initial?.items?.length ? initial.items.map((r) => ({ ...r })) : [{ itemId: "", qty: 1 }]
+    initial?.items?.length
+      ? initial.items.map((r) => ({ itemId: r.itemId || "", customName: r.customName || "", qty: r.qty }))
+      : [{ itemId: "", customName: "", qty: 1 }]
   );
 
   function updateRow(idx, patch) {
     setRows(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
   }
   function addRow() {
-    setRows([...rows, { itemId: "", qty: 1 }]);
+    setRows([...rows, { itemId: "", customName: "", qty: 1 }]);
   }
   function removeRow(idx) {
     setRows(rows.filter((_, i) => i !== idx));
@@ -1155,8 +1157,12 @@ function ProjectFormModal({ initial, items, onSave, onClose }) {
   function submit() {
     if (!name.trim()) return;
     const cleanItems = rows
-      .filter((r) => r.itemId && Number(r.qty) > 0)
-      .map((r) => ({ itemId: r.itemId, qty: Number(r.qty) }));
+      .filter((r) => (r.itemId === "__custom__" ? r.customName.trim() : r.itemId) && Number(r.qty) > 0)
+      .map((r) =>
+        r.itemId === "__custom__"
+          ? { itemId: null, customName: r.customName.trim(), qty: Number(r.qty) }
+          : { itemId: r.itemId, qty: Number(r.qty) }
+      );
     onSave({
       id: initial?.id || uid(),
       name: name.trim(),
@@ -1178,32 +1184,47 @@ function ProjectFormModal({ initial, items, onSave, onClose }) {
         </Field>
 
         <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "#4B5563", marginBottom: 8 }}>필요 장비</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#4B5563", marginBottom: 4 }}>필요 장비</div>
+          <div style={{ fontSize: 11.5, color: "#A2A9B8", marginBottom: 8 }}>
+            품목 목록에 없는 장비는 "직접 입력"을 선택해 이름을 적을 수 있습니다. (직접 입력한 장비는 목록 확인용으로만 쓰이며, "반영" 시 재고에는 반영되지 않습니다.)
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {rows.map((row, idx) => (
-              <div key={idx} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <Select
-                  value={row.itemId}
-                  onChange={(e) => updateRow(idx, { itemId: e.target.value })}
-                  style={{ flex: 3 }}
-                >
-                  <option value="">품목 선택</option>
-                  {items.map((it) => <option key={it.id} value={it.id}>{it.name}{it.location ? ` (${it.location})` : ""}</option>)}
-                </Select>
-                <TextInput
-                  type="number" min={1} value={row.qty}
-                  onChange={(e) => updateRow(idx, { qty: e.target.value })}
-                  style={{ flex: 1, width: "auto" }}
-                />
-                <button
-                  onClick={() => removeRow(idx)}
-                  title="삭제"
-                  style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, width: 30, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#E63946", flexShrink: 0 }}
-                >
-                  <Trash2 size={13} />
-                </button>
-              </div>
-            ))}
+            {rows.map((row, idx) => {
+              const isCustom = row.itemId === "__custom__";
+              return (
+                <div key={idx} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <Select
+                    value={row.itemId}
+                    onChange={(e) => updateRow(idx, { itemId: e.target.value })}
+                    style={{ flex: isCustom ? 1.2 : 3 }}
+                  >
+                    <option value="">품목 선택</option>
+                    {items.map((it) => <option key={it.id} value={it.id}>{it.name}{it.location ? ` (${it.location})` : ""}</option>)}
+                    <option value="__custom__">✎ 직접 입력...</option>
+                  </Select>
+                  {isCustom && (
+                    <TextInput
+                      value={row.customName}
+                      onChange={(e) => updateRow(idx, { customName: e.target.value })}
+                      placeholder="장비명 직접 입력"
+                      style={{ flex: 1.8 }}
+                    />
+                  )}
+                  <TextInput
+                    type="number" min={1} value={row.qty}
+                    onChange={(e) => updateRow(idx, { qty: e.target.value })}
+                    style={{ flex: 1, width: "auto" }}
+                  />
+                  <button
+                    onClick={() => removeRow(idx)}
+                    title="삭제"
+                    style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, width: 30, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#E63946", flexShrink: 0 }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              );
+            })}
           </div>
           <button
             onClick={addRow}
@@ -1231,9 +1252,12 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
 
   const stockByItem = useMemo(() => computeStockByItem(transactions), [transactions]);
 
-  function itemInfo(id) {
-    const it = items.find((i) => i.id === id);
-    return { name: it?.name || "삭제된 품목", unit: it?.unit || "EA" };
+  function itemInfo(row) {
+    if (!row.itemId) {
+      return { name: row.customName || "이름 없음", unit: "", custom: true };
+    }
+    const it = items.find((i) => i.id === row.itemId);
+    return { name: it?.name || "삭제된 품목", unit: it?.unit || "EA", custom: false };
   }
 
   async function saveProject(project) {
@@ -1260,7 +1284,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
     const today = todayStr();
     const newTxs = [];
     for (const row of project.items) {
-      if (!row.qty || row.qty <= 0) continue;
+      if (!row.itemId || !row.qty || row.qty <= 0) continue; // 직접입력 장비는 재고 대상이 아니므로 건너뜀
       const created = await insertTransaction({
         itemId: row.itemId, type: "out", outType: "프로젝트",
         qty: row.qty, date: today, vendorId: null, projectId: project.id,
@@ -1329,16 +1353,29 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                       </thead>
                       <tbody>
                         {p.items.map((row, idx) => {
-                          const info = itemInfo(row.itemId);
-                          const stock = stockByItem[row.itemId] || 0;
+                          const info = itemInfo(row);
+                          const stock = row.itemId ? (stockByItem[row.itemId] || 0) : 0;
                           const short = row.qty - stock;
                           return (
                             <tr key={idx} style={{ borderTop: "1px solid #F1F2F5" }}>
-                              <td style={{ padding: "6px 8px", fontWeight: 600, color: "#14213D" }}>{info.name}</td>
+                              <td style={{ padding: "6px 8px", fontWeight: 600, color: "#14213D" }}>
+                                {info.name}
+                                {info.custom && (
+                                  <span style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: "#F1F2F5", color: "#8A93A6" }}>
+                                    직접입력
+                                  </span>
+                                )}
+                              </td>
                               <td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "ui-monospace, monospace" }}>{row.qty} {info.unit}</td>
-                              <td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "ui-monospace, monospace", color: stock < row.qty ? "#E63946" : "#6B7280" }}>{stock} {info.unit}</td>
+                              <td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "ui-monospace, monospace", color: !info.custom && stock < row.qty ? "#E63946" : "#6B7280" }}>
+                                {info.custom ? "-" : `${stock} ${info.unit}`}
+                              </td>
                               <td style={{ padding: "6px 8px" }}>
-                                {short > 0 ? (
+                                {info.custom ? (
+                                  <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#EAF1FE", color: "#3B82F6" }}>
+                                    재고 미등록
+                                  </span>
+                                ) : short > 0 ? (
                                   <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#FCEBEC", color: "#E63946" }}>
                                     추가 발주 필요 (부족 {short})
                                   </span>
