@@ -21,6 +21,9 @@ import {
 
 const OUT_TYPES = ["납품", "샘플", "시연", "A/S", "프로젝트"];
 
+// 입출고 시 선택 가능한 단위 프리셋 (개수를 정확히 세기 어려운 경우 대비)
+const UNIT_PRESETS = ["EA", "박스", "세트", "묶음", "팩", "롤", "kg", "m"];
+
 // 선반 위치 옵션: A~I동, 각 1~3단 (직접 입력도 가능, 목록 선택도 가능)
 const LOCATION_OPTIONS = "ABCDEFGHI".split("").flatMap((row) =>
   [1, 2, 3].map((tier) => `${row}-${tier}`)
@@ -91,16 +94,18 @@ function computeLastDates(transactions) {
   const map = {};
   for (const t of transactions) {
     if (t.date > today) continue;
-    if (!map[t.itemId]) map[t.itemId] = { lastIn: null, lastOut: null, lastInId: null, lastOutId: null, lastInQty: null, lastOutQty: null };
+    if (!map[t.itemId]) map[t.itemId] = { lastIn: null, lastOut: null, lastInId: null, lastOutId: null, lastInQty: null, lastOutQty: null, lastInUnit: null, lastOutUnit: null };
     if (t.type === "in" && (!map[t.itemId].lastIn || t.date > map[t.itemId].lastIn)) {
       map[t.itemId].lastIn = t.date;
       map[t.itemId].lastInId = t.id;
       map[t.itemId].lastInQty = t.qty;
+      map[t.itemId].lastInUnit = t.unit || null;
     }
     if (t.type === "out" && (!map[t.itemId].lastOut || t.date > map[t.itemId].lastOut)) {
       map[t.itemId].lastOut = t.date;
       map[t.itemId].lastOutId = t.id;
       map[t.itemId].lastOutQty = t.qty;
+      map[t.itemId].lastOutUnit = t.unit || null;
     }
   }
   return map;
@@ -202,6 +207,63 @@ function LogoBadge({ height = 36, padding = "9px 16px" }) {
   return (
     <div style={{ display: "inline-flex", alignItems: "center", background: "#14213D", borderRadius: 9, padding }}>
       <img src={LOGO_DATA_URI} alt="Q.LIGHTING" style={{ height, width: "auto", display: "block" }} />
+    </div>
+  );
+}
+
+// 타이핑해서 검색하는 품목 선택기 (품목이 많을 때 스크롤 없이 빠르게 찾기 위함)
+function ItemPicker({ items, value, onSelect, onCustom, placeholder = "장비명 입력해서 검색" }) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const selected = items.find((i) => i.id === value);
+  const showingSelected = !open && selected;
+
+  const q = query.trim().toLowerCase();
+  const filtered = (q
+    ? items.filter((i) => i.name.toLowerCase().includes(q) || (i.location || "").toLowerCase().includes(q))
+    : items
+  ).slice(0, 8);
+
+  return (
+    <div style={{ position: "relative", flex: 3 }}>
+      <TextInput
+        value={showingSelected ? `${selected.name}${selected.location ? ` (${selected.location})` : ""}` : query}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => { setOpen(true); setQuery(""); }}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        placeholder={placeholder}
+        style={{ width: "100%", boxSizing: "border-box" }}
+      />
+      {open && (
+        <div style={{
+          position: "absolute", top: "100%", left: 0, right: 0, background: "#fff",
+          border: "1px solid #DADFE6", borderRadius: 8, marginTop: 4, maxHeight: 220,
+          overflowY: "auto", zIndex: 30, boxShadow: "0 10px 24px rgba(20,33,61,0.14)",
+        }}>
+          {filtered.length === 0 ? (
+            <div style={{ padding: "9px 12px", fontSize: 12.5, color: "#A2A9B8" }}>일치하는 품목이 없습니다</div>
+          ) : (
+            filtered.map((it) => (
+              <div
+                key={it.id}
+                onMouseDown={() => { onSelect(it.id); setQuery(""); setOpen(false); }}
+                style={{ padding: "8px 12px", fontSize: 12.5, cursor: "pointer", borderBottom: "1px solid #F1F2F5", color: "#14213D" }}
+              >
+                {it.name}{it.location ? <span style={{ color: "#A2A9B8" }}> ({it.location})</span> : null}
+              </div>
+            ))
+          )}
+          {onCustom && (
+            <div
+              onMouseDown={() => { onCustom(); setQuery(""); setOpen(false); }}
+              style={{ padding: "8px 12px", fontSize: 12.5, cursor: "pointer", color: "#6B7280", fontWeight: 700 }}
+            >
+              ✎ 직접 입력...
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -460,6 +522,9 @@ function TxFormModal({ item, defaultType, vendors, projects = [], initial, onSav
   const [type, setType] = useState(initial?.type || defaultType || "in");
   const [outType, setOutType] = useState(initial?.outType || OUT_TYPES[0]);
   const [qty, setQty] = useState(initial?.qty ?? 1);
+  const baseUnitOptions = Array.from(new Set([item.unit, ...UNIT_PRESETS].filter(Boolean)));
+  const [unitMode, setUnitMode] = useState(initial?.unit && !baseUnitOptions.includes(initial.unit) ? "custom" : "preset");
+  const [unit, setUnit] = useState(initial?.unit || item.unit || "EA");
   const [date, setDate] = useState(initial?.date || todayStr());
   const [vendorId, setVendorId] = useState(initial?.vendorId || "");
   const [projectId, setProjectId] = useState(initial?.projectId || "");
@@ -473,6 +538,7 @@ function TxFormModal({ item, defaultType, vendors, projects = [], initial, onSav
       type,
       outType: type === "out" ? outType : null,
       qty: Number(qty),
+      unit: unit.trim() || null,
       date,
       vendorId: vendorId || null,
       projectId: type === "out" ? (projectId || null) : null,
@@ -554,6 +620,34 @@ function TxFormModal({ item, defaultType, vendors, projects = [], initial, onSav
             </Field>
           </div>
         </div>
+
+        <Field label="단위">
+          {unitMode === "custom" ? (
+            <div style={{ display: "flex", gap: 6 }}>
+              <TextInput value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="단위 직접 입력 (예: 상자, 코일)" style={{ flex: 1 }} />
+              <button
+                type="button"
+                onClick={() => { setUnitMode("preset"); setUnit(item.unit || "EA"); }}
+                title="목록에서 선택"
+                style={{ border: "1px solid #DADFE6", background: "#fff", borderRadius: 6, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#8A93A6", flexShrink: 0 }}
+              >
+                <Search size={13} />
+              </button>
+            </div>
+          ) : (
+            <Select
+              value={unit}
+              onChange={(e) => {
+                if (e.target.value === "__custom__") { setUnitMode("custom"); setUnit(""); }
+                else setUnit(e.target.value);
+              }}
+            >
+              {baseUnitOptions.map((u) => <option key={u} value={u}>{u}</option>)}
+              <option value="__custom__">직접 입력...</option>
+            </Select>
+          )}
+          <div style={{ fontSize: 11, color: "#A2A9B8", marginTop: 3 }}>수량을 정확히 세기 어려우면 박스/세트 등 단위로 기록할 수 있습니다</div>
+        </Field>
 
         <Field label="거래처">
           <Select value={vendorId} onChange={(e) => setVendorId(e.target.value)}>
@@ -836,8 +930,10 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
         "현재재고": stock,
         "최근입고일": dates.lastIn || "",
         "최근입고수량": dates.lastInQty ?? "",
+        "최근입고단위": dates.lastInUnit || it.unit,
         "최근출고일": dates.lastOut || "",
         "최근출고수량": dates.lastOutQty ?? "",
+        "최근출고단위": dates.lastOutUnit || it.unit,
       };
     });
     exportToExcel(`재고현황_${todayStr()}.xlsx`, rows);
@@ -934,7 +1030,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                             style={{ border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: "inherit", fontSize: "inherit", color: "inherit", textDecoration: "underline dotted" }}
                           >
                             {dates.lastIn}
-                            <span style={{ color: "#2A9D8F", fontWeight: 700, marginLeft: 5 }}>+{dates.lastInQty}</span>
+                            <span style={{ color: "#2A9D8F", fontWeight: 700, marginLeft: 5 }}>+{dates.lastInQty}{dates.lastInUnit ? ` ${dates.lastInUnit}` : ""}</span>
                           </button>
                           <button
                             onClick={() => setTxModal({ item: it, tx: transactions.find((t) => t.id === dates.lastInId) })}
@@ -955,7 +1051,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                             style={{ border: "none", background: "none", cursor: "pointer", padding: 0, fontFamily: "inherit", fontSize: "inherit", color: "inherit", textDecoration: "underline dotted" }}
                           >
                             {dates.lastOut}
-                            <span style={{ color: "#E63946", fontWeight: 700, marginLeft: 5 }}>-{dates.lastOutQty}</span>
+                            <span style={{ color: "#E63946", fontWeight: 700, marginLeft: 5 }}>-{dates.lastOutQty}{dates.lastOutUnit ? ` ${dates.lastOutUnit}` : ""}</span>
                           </button>
                           <button
                             onClick={() => setTxModal({ item: it, tx: transactions.find((t) => t.id === dates.lastOutId) })}
@@ -1112,7 +1208,7 @@ function ItemHistory({ item, transactions, vendorName, projectName, onEdit, pend
                   {t.outType}
                 </span>
               )}
-              <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: "#14213D" }}>{t.qty}</span>
+              <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: "#14213D" }}>{t.qty}{t.unit ? ` ${t.unit}` : ""}</span>
               <span style={{ color: "#6B7280" }}>{vendorName(t.vendorId)}</span>
               {t.projectId && projectName && projectName(t.projectId) && (
                 <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#EAF1FE", color: "#0EA5E9" }}>
@@ -1319,28 +1415,37 @@ function ProjectFormModal({ initial, items, onSave, onClose }) {
         <div>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#4B5563", marginBottom: 4 }}>필요 장비</div>
           <div style={{ fontSize: 11.5, color: "#A2A9B8", marginBottom: 8 }}>
-            품목 목록에 없는 장비는 "직접 입력"을 선택해 이름을 적을 수 있습니다. (직접 입력한 장비는 목록 확인용으로만 쓰이며, "반영" 시 재고에는 반영되지 않습니다.)
+            장비명을 입력하면 일치하는 품목이 아래에 뜹니다. 목록에 없는 장비는 검색결과 맨 아래 "직접 입력"을 선택해 이름을 적을 수 있습니다. (직접 입력한 장비는 목록 확인용으로만 쓰이며, "반영" 시 재고에는 반영되지 않습니다.)
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {rows.map((row, idx) => {
               const isCustom = row.itemId === "__custom__";
               return (
                 <div key={idx} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <Select
-                    value={row.itemId}
-                    onChange={(e) => updateRow(idx, { itemId: e.target.value })}
-                    style={{ flex: isCustom ? 1.2 : 3 }}
-                  >
-                    <option value="">품목 선택</option>
-                    {items.map((it) => <option key={it.id} value={it.id}>{it.name}{it.location ? ` (${it.location})` : ""}</option>)}
-                    <option value="__custom__">✎ 직접 입력...</option>
-                  </Select>
-                  {isCustom && (
-                    <TextInput
-                      value={row.customName}
-                      onChange={(e) => updateRow(idx, { customName: e.target.value })}
-                      placeholder="장비명 직접 입력"
-                      style={{ flex: 1.8 }}
+                  {isCustom ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => updateRow(idx, { itemId: "", customName: "" })}
+                        title="품목 검색으로 돌아가기"
+                        style={{ border: "1px solid #E5E7EB", background: "#F7F8FA", borderRadius: 6, width: 30, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#6B7280", flexShrink: 0 }}
+                      >
+                        <Search size={13} />
+                      </button>
+                      <TextInput
+                        value={row.customName}
+                        onChange={(e) => updateRow(idx, { customName: e.target.value })}
+                        placeholder="장비명 직접 입력"
+                        style={{ flex: 2 }}
+                        autoFocus
+                      />
+                    </>
+                  ) : (
+                    <ItemPicker
+                      items={items}
+                      value={row.itemId}
+                      onSelect={(id) => updateRow(idx, { itemId: id })}
+                      onCustom={() => updateRow(idx, { itemId: "__custom__" })}
                     />
                   )}
                   <TextInput
@@ -1407,7 +1512,15 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
   }
 
   async function deleteProject(id) {
+    const relatedTx = transactions.filter((t) => t.projectId === id);
+    for (const t of relatedTx) {
+      await deleteTransactionRow(t.id);
+    }
     await deleteProjectRow(id);
+    if (relatedTx.length > 0) {
+      const relatedIds = new Set(relatedTx.map((t) => t.id));
+      setTransactions(transactions.filter((t) => !relatedIds.has(t.id)));
+    }
     setProjects(projects.filter((p) => p.id !== id));
     setDeleteTarget(null);
   }
@@ -1437,29 +1550,36 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
     setProjects(projects.map((p) => (p.id === project.id ? updated : p)));
   }
 
-  function exportProjects() {
+  function buildProjectRows(p) {
     const rows = [];
-    for (const p of projects) {
-      if (p.items.length === 0) {
-        rows.push({
-          "프로젝트명": p.name, "발주기한": p.dueDate || "", "상태": p.status === "applied" ? "반영완료" : "대기중",
-          "품목": "", "필요수량": "", "현재재고": "", "발주필요": "", "발주완료": "",
-        });
-        continue;
-      }
-      for (const row of p.items) {
-        const info = itemInfo(row);
-        const stock = row.itemId ? (stockByItem[row.itemId] || 0) : "";
-        const short = row.itemId ? row.qty - stock : "";
-        rows.push({
-          "프로젝트명": p.name, "발주기한": p.dueDate || "", "상태": p.status === "applied" ? "반영완료" : "대기중",
-          "품목": info.name, "필요수량": row.qty, "현재재고": info.custom ? "미등록" : stock,
-          "발주필요": info.custom ? "" : (short > 0 ? `부족 ${short}` : "충분"),
-          "발주완료": row.ordered ? "O" : "",
-        });
-      }
+    if (p.items.length === 0) {
+      rows.push({
+        "프로젝트명": p.name, "발주기한": p.dueDate || "", "상태": p.status === "applied" ? "반영완료" : "대기중",
+        "품목": "", "필요수량": "", "현재재고": "", "발주필요": "", "발주완료": "",
+      });
+      return rows;
     }
+    for (const row of p.items) {
+      const info = itemInfo(row);
+      const stock = row.itemId ? (stockByItem[row.itemId] || 0) : "";
+      const short = row.itemId ? row.qty - stock : "";
+      rows.push({
+        "프로젝트명": p.name, "발주기한": p.dueDate || "", "상태": p.status === "applied" ? "반영완료" : "대기중",
+        "품목": info.name, "필요수량": row.qty, "현재재고": info.custom ? "미등록" : stock,
+        "발주필요": info.custom ? "" : (short > 0 ? `부족 ${short}` : "충분"),
+        "발주완료": row.ordered ? "O" : "",
+      });
+    }
+    return rows;
+  }
+
+  function exportProjects() {
+    const rows = projects.flatMap((p) => buildProjectRows(p));
     exportToExcel(`프로젝트_${todayStr()}.xlsx`, rows);
+  }
+
+  function exportSingleProject(p) {
+    exportToExcel(`프로젝트_${p.name}_${todayStr()}.xlsx`, buildProjectRows(p));
   }
 
   return (
@@ -1514,6 +1634,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                     {p.note && <div style={{ fontSize: 12.5, color: "#8A93A6", marginTop: 4 }}>{p.note}</div>}
                   </div>
                   <div className="no-print" style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    <IconBtn title="엑셀로 저장" color="#6B7280" onClick={() => exportSingleProject(p)}><FileDown size={14} /></IconBtn>
                     <IconBtn title="인쇄" color="#6B7280" onClick={() => printElementById(`project-print-${p.id}`)}><Printer size={14} /></IconBtn>
                     <IconBtn title="수정" color="#6B7280" onClick={() => setEditProject(p)}><Edit2 size={14} /></IconBtn>
                     <IconBtn title="삭제" color="#6B7280" onClick={() => setDeleteTarget(p)}><Trash2 size={14} /></IconBtn>
@@ -1607,7 +1728,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
       {editProject && <ProjectFormModal initial={editProject} items={items} onSave={saveProject} onClose={() => setEditProject(null)} />}
       {deleteTarget && (
         <ConfirmDialog
-          text={`'${deleteTarget.name}' 프로젝트를 삭제하시겠습니까? (이미 반영된 출고 기록은 그대로 유지됩니다)`}
+          text={`'${deleteTarget.name}' 프로젝트를 삭제하시겠습니까? 이 프로젝트로 "반영"되어 등록된 출고 기록도 함께 삭제되어 재고에 되돌아갑니다.`}
           onConfirm={() => deleteProject(deleteTarget.id)}
           onClose={() => setDeleteTarget(null)}
         />
@@ -1726,7 +1847,13 @@ function DashboardTab({ items, transactions, vendors, events }) {
     { label: "오늘 입고 / 출고", value: `${todayIn} / ${todayOut}건`, color: "#FB8500" },
   ];
 
-  const sortedItems = [...items].sort((a, b) => (stockByItem[a.id] || 0) - (stockByItem[b.id] || 0));
+  const sortedItems = [...items].sort((a, b) => {
+    // 위치(A-1, A-2, ..., I-9) 기준 알파벳+숫자 자연 정렬. 위치 없는 품목은 맨 뒤로.
+    if (!a.location && !b.location) return 0;
+    if (!a.location) return 1;
+    if (!b.location) return -1;
+    return a.location.localeCompare(b.location, undefined, { numeric: true, sensitivity: "base" });
+  });
 
   // 품목별 월말 재고 스냅샷 집계 (예정 거래 제외, 실제 발생분만 누적, 날짜 미정 거래는 제외)
   const itemMonthlyStock = useMemo(() => {
@@ -1999,14 +2126,14 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
       if (!t.date || !t.date.startsWith(monthPrefix)) continue;
       rows.push({
         "날짜": t.date, "구분": t.type === "in" ? "입고" : "출고",
-        "품목": itemName(t.itemId), "수량": t.qty, "출고종류": t.outType || "",
+        "품목": itemName(t.itemId), "수량": t.qty, "단위": t.unit || "", "출고종류": t.outType || "",
         "거래처": vendorName(t.vendorId), "프로젝트": projectName(t.projectId), "비고": t.note || "",
       });
     }
     for (const e of events) {
       if (!e.date.startsWith(monthPrefix)) continue;
       rows.push({
-        "날짜": e.date, "구분": "일정", "품목": e.title, "수량": "", "출고종류": "",
+        "날짜": e.date, "구분": "일정", "품목": e.title, "수량": "", "단위": "", "출고종류": "",
         "거래처": "", "프로젝트": "", "비고": e.note || "",
       });
     }
