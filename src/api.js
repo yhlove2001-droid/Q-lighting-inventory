@@ -155,7 +155,7 @@ export async function deleteEventRow(id) {
 function rowToProject(r) {
   return {
     id: r.id, name: r.name, note: r.note || "", items: r.items || [],
-    status: r.status, appliedAt: r.applied_at, createdAt: r.created_at,
+    status: r.status, appliedAt: r.applied_at, dueDate: r.due_date || null, createdAt: r.created_at,
   };
 }
 export async function fetchProjects() {
@@ -165,13 +165,13 @@ export async function fetchProjects() {
 }
 export async function insertProject(p) {
   const { data, error } = await supabase.from("projects").insert({
-    name: p.name, note: p.note, items: p.items, status: p.status || "pending",
+    name: p.name, note: p.note, items: p.items, status: p.status || "pending", due_date: p.dueDate || null,
   }).select().single();
   if (error) throw error;
   return rowToProject(data);
 }
 export async function updateProject(id, p) {
-  const patch = { name: p.name, note: p.note, items: p.items, status: p.status };
+  const patch = { name: p.name, note: p.note, items: p.items, status: p.status, due_date: p.dueDate || null };
   if (p.status === "applied") patch.applied_at = new Date().toISOString();
   const { data, error } = await supabase.from("projects").update(patch).eq("id", id).select().single();
   if (error) throw error;
