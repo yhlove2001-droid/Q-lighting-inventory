@@ -150,6 +150,7 @@ function Modal({ title, onClose, children, width = 480 }) {
       }}
     >
       <div
+        className="modal-box"
         onClick={(e) => e.stopPropagation()}
         style={{
           background: "#fff", borderRadius: 10, width: "100%", maxWidth: width,
@@ -479,7 +480,7 @@ function ItemFormModal({ initial, onSave, onClose }) {
         <Field label="품목명" required>
           <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="예: 산업용 센서 A" autoFocus />
         </Field>
-        <div style={{ display: "flex", gap: 12 }}>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <div style={{ flex: 2 }}>
             <Field label="위치">
               <TextInput
@@ -595,7 +596,7 @@ function TxFormModal({ item, defaultType, vendors, projects = [], initial, onSav
           </Field>
         )}
 
-        <div style={{ display: "flex", gap: 12 }}>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <div style={{ flex: 1 }}>
             <Field label="수량" required>
               <TextInput type="number" min={1} value={qty} onChange={(e) => setQty(e.target.value)} style={{ width: "100%", boxSizing: "border-box" }} />
@@ -720,7 +721,7 @@ function VendorFormModal({ initial, onSave, onClose }) {
         <Field label="거래처명" required>
           <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="예: (주)한빛산업" autoFocus />
         </Field>
-        <div style={{ display: "flex", gap: 12 }}>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <div style={{ flex: 1 }}>
             <Field label="담당자">
               <TextInput value={contact} onChange={(e) => setContact(e.target.value)} style={{ width: "100%", boxSizing: "border-box" }} />
@@ -970,6 +971,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
       </div>
 
       <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
+        <div className="table-scroll">
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
           <thead>
             <tr style={{ background: "#F7F8FA", color: "#6B7280", textAlign: "left" }}>
@@ -1084,6 +1086,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
             })}
           </tbody>
         </table>
+        </div>
       </div>
 
       {showItemForm && <ItemFormModal onSave={saveItem} onClose={() => setShowItemForm(false)} />}
@@ -1311,6 +1314,7 @@ function VendorsTab({ vendors, setVendors }) {
       </div>
 
       <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
+        <div className="table-scroll">
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
           <thead>
             <tr style={{ background: "#F7F8FA", color: "#6B7280", textAlign: "left" }}>
@@ -1343,6 +1347,7 @@ function VendorsTab({ vendors, setVendors }) {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       {showForm && <VendorFormModal onSave={saveVendor} onClose={() => setShowForm(false)} />}
@@ -1421,7 +1426,7 @@ function ProjectFormModal({ initial, items, onSave, onClose }) {
             {rows.map((row, idx) => {
               const isCustom = row.itemId === "__custom__";
               return (
-                <div key={idx} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <div key={idx} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   {isCustom ? (
                     <>
                       <button
@@ -1645,6 +1650,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                   {p.items.length === 0 ? (
                     <div style={{ fontSize: 12.5, color: "#A2A9B8" }}>등록된 장비가 없습니다.</div>
                   ) : (
+                    <div className="table-scroll">
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                       <thead>
                         <tr style={{ color: "#8A93A6", textAlign: "left" }}>
@@ -1706,6 +1712,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                         })}
                       </tbody>
                     </table>
+                    </div>
                   )}
                 </div>
 
@@ -1952,6 +1959,7 @@ function DashboardTab({ items, transactions, vendors, events }) {
         <div style={{ padding: "14px 18px", borderBottom: "1px solid #EEF0F3", fontWeight: 800, fontSize: 14, color: "#14213D" }}>
           재고 현황
         </div>
+        <div className="table-scroll">
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
           <thead>
             <tr style={{ background: "#F7F8FA", color: "#6B7280", textAlign: "left" }}>
@@ -1987,6 +1995,7 @@ function DashboardTab({ items, transactions, vendors, events }) {
             })}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );
@@ -2472,7 +2481,7 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: "#F5F6F8", fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif" }}>
-      <div style={{
+      <div className="app-header no-print" style={{
         background: "#14213D", color: "#fff", padding: "0 24px", height: 58,
         display: "flex", alignItems: "center", justifyContent: "space-between",
       }}>
@@ -2498,8 +2507,8 @@ export default function App() {
         </div>
       </div>
 
-      <div style={{ display: "flex" }}>
-        <div style={{ width: 190, borderRight: "1px solid #EEF0F3", background: "#fff", minHeight: "calc(100vh - 58px)", padding: "16px 10px" }}>
+      <div className="app-shell" style={{ display: "flex" }}>
+        <div className="app-sidebar no-print" style={{ width: 190, borderRight: "1px solid #EEF0F3", background: "#fff", minHeight: "calc(100vh - 58px)", padding: "16px 10px" }}>
           {navItems.map((n) => {
             const Icon = n.icon;
             const active = tab === n.id;
@@ -2527,14 +2536,14 @@ export default function App() {
               </button>
             );
           })}
-          <div style={{ marginTop: 20, padding: "10px 12px", borderTop: "1px solid #F1F2F5" }}>
+          <div className="sidebar-footer" style={{ marginTop: 20, padding: "10px 12px", borderTop: "1px solid #F1F2F5" }}>
             <div style={{ fontSize: 11, color: "#A2A9B8", display: "flex", alignItems: "center", gap: 6 }}>
               <ClipboardList size={13} /> 품목 {items.length}개 · 거래처 {vendors.length}개
             </div>
           </div>
         </div>
 
-        <div style={{ flex: 1, padding: "24px 28px" }}>
+        <div className="app-content" style={{ flex: 1, padding: "24px 28px", minWidth: 0 }}>
           <h2 style={{ margin: "0 0 18px 0", fontSize: 19, fontWeight: 900, color: "#14213D" }}>
             {navItems.find((n) => n.id === tab)?.label}
           </h2>
