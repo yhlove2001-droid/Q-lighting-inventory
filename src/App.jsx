@@ -2128,8 +2128,16 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
     setCancelTarget(null);
   }
 
-  async function toggleOrdered(project, rowIdx) {
-    const newItems = project.items.map((r, i) => (i === rowIdx ? { ...r, ordered: !r.ordered } : r));
+  async function toggleOrdered(project, rowIdx, defaultOrderQty) {
+    const newItems = project.items.map((r, i) => {
+      if (i !== rowIdx) return r;
+      const nextOrdered = !r.ordered;
+      return {
+        ...r,
+        ordered: nextOrdered,
+        orderQty: nextOrdered && r.orderQty === undefined && defaultOrderQty !== undefined ? defaultOrderQty : r.orderQty,
+      };
+    });
     if (isMember) {
       await queueChange("edit", project.id, { ...project, items: newItems }, `프로젝트 '${project.name}' 발주 체크 변경 요청`);
       return;
@@ -2328,6 +2336,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                           const stock = row.itemId ? (stockByItem[row.itemId] || 0) : 0;
                           const totalDemand = row.itemId ? (demandByItem[row.itemId] || 0) : 0;
                           const short = totalDemand - stock;
+                          const ownShort = Math.max((row.qty || 0) - stock, 0); // 이 항목 자체의 부족량(체크 후에도 값이 변하지 않음)
                           const sharedWithOthers = row.itemId && !row.ordered && totalDemand > row.qty;
                           return (
                             <tr key={idx} style={{ borderTop: "1px solid #F1F2F5" }}>
@@ -2350,7 +2359,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                       <input
                                         type="checkbox"
                                         checked={!!row.ordered}
-                                        onChange={() => toggleOrdered(p, idx)}
+                                        onChange={() => toggleOrdered(p, idx, row.qty)}
                                         className="no-print"
                                         style={{ width: 14, height: 14, cursor: "pointer" }}
                                       />
@@ -2374,9 +2383,6 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                           onChange={(e) => setOrderQty(p, idx, e.target.value)}
                                           style={{ width: 60, padding: "3px 6px", fontSize: 11.5 }}
                                         />
-                                        {Number(row.orderQty) > row.qty && (
-                                          <span style={{ fontSize: 10.5, color: "#8A93A6" }}>(예비 +{Number(row.orderQty) - row.qty})</span>
-                                        )}
                                       </div>
                                     )}
                                   </div>
@@ -2386,7 +2392,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                       <input
                                         type="checkbox"
                                         checked={!!row.ordered}
-                                        onChange={() => toggleOrdered(p, idx)}
+                                        onChange={() => toggleOrdered(p, idx, ownShort)}
                                         className="no-print"
                                         style={{ width: 14, height: 14, cursor: "pointer" }}
                                       />
@@ -2395,7 +2401,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                         background: row.ordered ? "#EAF7F5" : "#FCEBEC",
                                         color: row.ordered ? "#2A9D8F" : "#E63946",
                                       }}>
-                                        {row.ordered ? `발주완료 (${row.orderQty ?? short}${info.unit ? ` ${info.unit}` : ""})` : `추가 발주 필요 (부족 ${short})`}
+                                        {row.ordered ? `발주완료 (${row.orderQty ?? ownShort}${info.unit ? ` ${info.unit}` : ""})` : `추가 발주 필요 (부족 ${short})`}
                                       </span>
                                     </label>
                                     {!row.ordered && sharedWithOthers && (
@@ -2406,13 +2412,10 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                         <span style={{ fontSize: 10.5, color: "#8A93A6" }}>발주수량</span>
                                         <TextInput
                                           type="number" min={1}
-                                          value={row.orderQty ?? short}
+                                          value={row.orderQty ?? ownShort}
                                           onChange={(e) => setOrderQty(p, idx, e.target.value)}
                                           style={{ width: 60, padding: "3px 6px", fontSize: 11.5 }}
                                         />
-                                        {Number(row.orderQty ?? short) > short && (
-                                          <span style={{ fontSize: 10.5, color: "#8A93A6" }}>(예비 +{Number(row.orderQty ?? short) - short})</span>
-                                        )}
                                       </div>
                                     )}
                                   </div>
