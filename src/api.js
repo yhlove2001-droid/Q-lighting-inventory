@@ -182,6 +182,38 @@ export async function deleteProjectRow(id) {
   if (error) throw error;
 }
 
+// ---------- incoming_requests (입고예정) ----------
+function rowToIncoming(r) {
+  return {
+    id: r.id, projectId: r.project_id || null, name: r.name, qty: Number(r.qty), unit: r.unit || null,
+    status: r.status, destination: r.destination || null, location: r.location || null,
+    itemId: r.item_id || null, receivedAt: r.received_at || null, createdAt: r.created_at,
+  };
+}
+export async function fetchIncomingRequests() {
+  const { data, error } = await supabase.from("incoming_requests").select("*").order("created_at", { ascending: false });
+  if (error) { console.error(error); return []; }
+  return data.map(rowToIncoming);
+}
+export async function insertIncomingRequest(r) {
+  const { data, error } = await supabase.from("incoming_requests").insert({
+    project_id: r.projectId || null, name: r.name, qty: r.qty, unit: r.unit || null, status: "pending",
+  }).select().single();
+  if (error) throw error;
+  return rowToIncoming(data);
+}
+export async function updateIncomingRequest(id, patch) {
+  const dbPatch = {};
+  if ("status" in patch) dbPatch.status = patch.status;
+  if ("destination" in patch) dbPatch.destination = patch.destination;
+  if ("location" in patch) dbPatch.location = patch.location;
+  if ("itemId" in patch) dbPatch.item_id = patch.itemId;
+  if ("receivedAt" in patch) dbPatch.received_at = patch.receivedAt;
+  const { data, error } = await supabase.from("incoming_requests").update(dbPatch).eq("id", id).select().single();
+  if (error) throw error;
+  return rowToIncoming(data);
+}
+
 // ---------- pending_changes (변경 승인 대기) ----------
 function rowToPending(r) {
   return {

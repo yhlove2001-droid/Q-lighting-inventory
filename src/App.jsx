@@ -16,6 +16,7 @@ import {
   fetchTransactions, insertTransaction, updateTransaction, deleteTransactionRow,
   fetchEvents, insertEvent, updateEvent, deleteEventRow,
   fetchProjects, insertProject, updateProject, deleteProjectRow,
+  fetchIncomingRequests, insertIncomingRequest, updateIncomingRequest,
   fetchPending, insertPending, deletePendingRow,
 } from "./api";
 
@@ -814,7 +815,7 @@ function ConfirmDialog({ text, onConfirm, onClose }) {
 }
 
 // ---------- Inventory tab ----------
-function InventoryTab({ items, setItems, transactions, setTransactions, vendors, projects, role, username, pending, setPending }) {
+function InventoryTab({ items, setItems, transactions, setTransactions, vendors, projects, incoming = [], setIncoming, role, username, pending, setPending }) {
   const [search, setSearch] = useState("");
   const [showItemForm, setShowItemForm] = useState(false);
   const [editItem, setEditItem] = useState(null);
@@ -823,11 +824,57 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [expandedItem, setExpandedItem] = useState(null);
   const [notice, setNotice] = useState("");
+  const [incomingChoice, setIncomingChoice] = useState({});
 
   const isMember = role === "member";
 
   const stockByItem = useMemo(() => computeStockByItem(transactions), [transactions]);
   const lastDates = useMemo(() => computeLastDates(transactions), [transactions]);
+
+  function projectNameFor(id) {
+    return projects.find((p) => p.id === id)?.name || "";
+  }
+
+  function setChoice(id, patch) {
+    setIncomingChoice((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+  }
+
+  async function confirmIncoming(req) {
+    const choice = incomingChoice[req.id] || {};
+    if (!choice.destination) return;
+    if (choice.destination === "warehouse" && !choice.location) return;
+
+    if (isMember) {
+      const created = await insertPending({
+        entity: "incoming", action: "receive", targetId: req.id,
+        payload: { destination: choice.destination, location: choice.location || null },
+        summary: `입고예정 '${req.name}' ${choice.destination === "warehouse" ? "창고 입고" : "프로젝트 직접 전달"} 처리 요청`,
+        requestedBy: username,
+      });
+      setPending([created, ...pending]);
+      setNotice("입고 처리 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
+      return;
+    }
+
+    if (choice.destination === "warehouse") {
+      const newItem = await insertItem({ name: req.name, location: choice.location, unit: req.unit || "EA", note: "" });
+      setItems([...items, newItem]);
+      const newTx = await insertTransaction({
+        itemId: newItem.id, type: "in", qty: req.qty, date: todayStr(), vendorId: null,
+        note: `입고예정 확정 (${choice.location})`,
+      });
+      setTransactions([newTx, ...transactions]);
+      const updatedReq = await updateIncomingRequest(req.id, {
+        status: "received", destination: "warehouse", location: choice.location, itemId: newItem.id, receivedAt: new Date().toISOString(),
+      });
+      setIncoming(incoming.map((r) => (r.id === req.id ? updatedReq : r)));
+    } else {
+      const updatedReq = await updateIncomingRequest(req.id, {
+        status: "received", destination: "project", receivedAt: new Date().toISOString(),
+      });
+      setIncoming(incoming.map((r) => (r.id === req.id ? updatedReq : r)));
+    }
+  }
 
   const filtered = items
     .filter((it) => (it.name + it.location).toLowerCase().includes(search.toLowerCase()))
@@ -1094,6 +1141,89 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
         </table>
         </div>
       </div>
+
+      {(() => {
+        const pendingIncoming = incoming.filter((r) => r.status === "pending");
+        if (pendingIncoming.length === 0) return null;
+        return (
+          <div style={{ marginTop: 24 }}>
+            <datalist id="location-options-incoming">
+              {LOCATION_OPTIONS.map((opt) => <option key={opt} value={opt} />)}
+            </datalist>
+            <div style={{ fontWeight: 800, fontSize: 15, color: "#14213D", marginBottom: 10 }}>
+              입고예정 ({pendingIncoming.length}건)
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {pendingIncoming.map((req) => {
+                const choice = incomingChoice[req.id] || {};
+                const isPendingRequest = pending.some((p) => p.entity === "incoming" && p.targetId === req.id);
+                return (
+                  <div key={req.id} style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: "14px 16px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                      <div>
+                        <span style={{ fontWeight: 700, fontSize: 14, color: "#14213D" }}>{req.name}</span>
+                        <span style={{ marginLeft: 8, fontFamily: "ui-monospace, monospace", color: "#8A93A6", fontSize: 12.5 }}>수량 {req.qty}{req.unit ? ` ${req.unit}` : ""}</span>
+                        {req.projectId && projectNameFor(req.projectId) && (
+                          <span style={{ marginLeft: 8, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#EAF1FE", color: "#0EA5E9" }}>
+                            {projectNameFor(req.projectId)}
+                          </span>
+                        )}
+                        {isPendingRequest && (
+                          <span style={{ marginLeft: 8, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>
+                            승인대기
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                      <button
+                        type="button"
+                        onClick={() => setChoice(req.id, { destination: "warehouse" })}
+                        style={{
+                          padding: "7px 12px", borderRadius: 7, cursor: "pointer", fontSize: 12.5, fontWeight: 700,
+                          border: choice.destination === "warehouse" ? "2px solid #2A9D8F" : "1px solid #DADFE6",
+                          background: choice.destination === "warehouse" ? "#EAF7F5" : "#fff",
+                          color: "#2A9D8F",
+                        }}
+                      >
+                        창고로 입고
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setChoice(req.id, { destination: "project" })}
+                        style={{
+                          padding: "7px 12px", borderRadius: 7, cursor: "pointer", fontSize: 12.5, fontWeight: 700,
+                          border: choice.destination === "project" ? "2px solid #3B82F6" : "1px solid #DADFE6",
+                          background: choice.destination === "project" ? "#EAF1FE" : "#fff",
+                          color: "#3B82F6",
+                        }}
+                      >
+                        창고 거치지 않고 프로젝트로 직접 전달
+                      </button>
+                      {choice.destination === "warehouse" && (
+                        <TextInput
+                          value={choice.location || ""}
+                          onChange={(e) => setChoice(req.id, { location: e.target.value })}
+                          placeholder="창고 위치 (예: A-1)"
+                          list="location-options-incoming"
+                          style={{ width: 160 }}
+                        />
+                      )}
+                      <PrimaryButton
+                        onClick={() => confirmIncoming(req)}
+                        disabled={!choice.destination || (choice.destination === "warehouse" && !choice.location) || isPendingRequest}
+                        style={{ opacity: !choice.destination || (choice.destination === "warehouse" && !choice.location) || isPendingRequest ? 0.5 : 1 }}
+                      >
+                        {isMember ? "처리 요청" : "확정"}
+                      </PrimaryButton>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {showItemForm && <ItemFormModal onSave={saveItem} onClose={() => setShowItemForm(false)} />}
       {editItem && <ItemFormModal initial={editItem} onSave={saveItem} onClose={() => setEditItem(null)} />}
@@ -1539,7 +1669,7 @@ function ProjectFormModal({ initial, items, onSave, onClose }) {
 }
 
 // ---------- Projects tab ----------
-function ProjectsTab({ projects, setProjects, items, transactions, setTransactions, role, username, pending, setPending }) {
+function ProjectsTab({ projects, setProjects, items, transactions, setTransactions, incoming = [], setIncoming, role, username, pending, setPending }) {
   const [showForm, setShowForm] = useState(false);
   const [editProject, setEditProject] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -1659,16 +1789,27 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
     setApplying(project.id);
     const today = todayStr();
     const newTxs = [];
+    const newIncoming = [];
     for (const row of project.items) {
-      if (!row.itemId || !row.qty || row.qty <= 0) continue; // 직접입력 장비는 재고 대상이 아니므로 건너뜀
-      const created = await insertTransaction({
-        itemId: row.itemId, type: "out", outType: "프로젝트",
-        qty: row.qty, date: today, vendorId: null, projectId: project.id,
-        note: `${project.name} 프로젝트 반영`,
-      });
-      newTxs.push(created);
+      if (!row.qty || row.qty <= 0) continue;
+      if (row.itemId) {
+        // 재고에 등록된 장비: 실제 출고 처리
+        const created = await insertTransaction({
+          itemId: row.itemId, type: "out", outType: "프로젝트",
+          qty: row.qty, date: today, vendorId: null, projectId: project.id,
+          note: `${project.name} 프로젝트 반영`,
+        });
+        newTxs.push(created);
+      } else if (row.ordered && row.customName) {
+        // 직접입력한(재고 미등록) 장비 중 체크된 것: 입고예정으로 등록
+        const createdIncoming = await insertIncomingRequest({
+          projectId: project.id, name: row.customName, qty: row.qty, unit: null,
+        });
+        newIncoming.push(createdIncoming);
+      }
     }
     setTransactions([...newTxs, ...transactions]);
+    if (newIncoming.length > 0 && setIncoming) setIncoming([...newIncoming, ...incoming]);
     const updated = await updateProject(project.id, { ...project, status: "applied" });
     setProjects(projects.map((p) => (p.id === project.id ? updated : p)));
     setApplying(null);
@@ -1869,9 +2010,27 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                               </td>
                               <td style={{ padding: "6px 8px" }}>
                                 {info.custom ? (
-                                  <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#EAF1FE", color: "#3B82F6" }}>
-                                    재고 미등록
-                                  </span>
+                                  <div>
+                                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={!!row.ordered}
+                                        onChange={() => toggleOrdered(p, idx)}
+                                        className="no-print"
+                                        style={{ width: 14, height: 14, cursor: "pointer" }}
+                                      />
+                                      <span style={{
+                                        padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700,
+                                        background: row.ordered ? "#EAF7F5" : "#EAF1FE",
+                                        color: row.ordered ? "#2A9D8F" : "#3B82F6",
+                                      }}>
+                                        {row.ordered ? "입고예정 등록됨" : "재고 미등록"}
+                                      </span>
+                                    </label>
+                                    {!row.ordered && (
+                                      <div style={{ fontSize: 10.5, color: "#A2A9B8", marginTop: 2 }}>체크 후 "반영"하면 재고관리 &gt; 입고예정에 등록됩니다</div>
+                                    )}
+                                  </div>
                                 ) : row.ordered || short > 0 ? (
                                   <div>
                                     <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
@@ -2535,6 +2694,7 @@ function AdminTab({
   users, setUsers, pending, setPending,
   items, setItems, transactions, setTransactions,
   vendors, setVendors, events, setEvents, projects, setProjects,
+  incoming = [], setIncoming,
 }) {
   const pendingUsers = users.filter((u) => u.status === "pending");
 
@@ -2623,18 +2783,52 @@ function AdminTab({
         if (project && project.status !== "applied") {
           const today = todayStr();
           const newTxs = [];
+          const newIncoming = [];
           for (const row of project.items) {
-            if (!row.itemId || !row.qty || row.qty <= 0) continue;
-            const created = await insertTransaction({
-              itemId: row.itemId, type: "out", outType: "프로젝트",
-              qty: row.qty, date: today, vendorId: null, projectId: project.id,
-              note: `${project.name} 프로젝트 반영`,
-            });
-            newTxs.push(created);
+            if (!row.qty || row.qty <= 0) continue;
+            if (row.itemId) {
+              const created = await insertTransaction({
+                itemId: row.itemId, type: "out", outType: "프로젝트",
+                qty: row.qty, date: today, vendorId: null, projectId: project.id,
+                note: `${project.name} 프로젝트 반영`,
+              });
+              newTxs.push(created);
+            } else if (row.ordered && row.customName) {
+              const createdIncoming = await insertIncomingRequest({
+                projectId: project.id, name: row.customName, qty: row.qty, unit: null,
+              });
+              newIncoming.push(createdIncoming);
+            }
           }
           setTransactions([...newTxs, ...transactions]);
+          if (newIncoming.length > 0) setIncoming([...newIncoming, ...incoming]);
           const updated = await updateProject(project.id, { ...project, status: "applied" });
           setProjects(projects.map((pr) => (pr.id === project.id ? updated : pr)));
+        }
+      }
+    } else if (p.entity === "incoming") {
+      if (p.action === "receive") {
+        const req = incoming.find((r) => r.id === p.targetId);
+        if (req && req.status !== "received") {
+          const { destination, location } = p.payload || {};
+          if (destination === "warehouse") {
+            const newItem = await insertItem({ name: req.name, location: location || "", unit: req.unit || "EA", note: "" });
+            setItems([...items, newItem]);
+            const newTx = await insertTransaction({
+              itemId: newItem.id, type: "in", qty: req.qty, date: todayStr(), vendorId: null,
+              note: `입고예정 확정 (${location || "위치 미지정"})`,
+            });
+            setTransactions([newTx, ...transactions]);
+            const updatedReq = await updateIncomingRequest(req.id, {
+              status: "received", destination: "warehouse", location: location || "", itemId: newItem.id, receivedAt: new Date().toISOString(),
+            });
+            setIncoming(incoming.map((r) => (r.id === req.id ? updatedReq : r)));
+          } else {
+            const updatedReq = await updateIncomingRequest(req.id, {
+              status: "received", destination: "project", receivedAt: new Date().toISOString(),
+            });
+            setIncoming(incoming.map((r) => (r.id === req.id ? updatedReq : r)));
+          }
         }
       }
     }
@@ -2715,6 +2909,7 @@ export default function App() {
   const [vendors, setVendors] = useState([]);
   const [events, setEvents] = useState([]);
   const [projects, setProjects] = useState([]);
+  const [incoming, setIncoming] = useState([]);
   const [users, setUsers] = useState([]);
   const [pending, setPending] = useState([]);
 
@@ -2736,12 +2931,13 @@ export default function App() {
 
   async function loadAllData(role) {
     setLoading(true);
-    const [i, t, v, e, pr, p] = await Promise.all([
+    const [i, t, v, e, pr, ic, p] = await Promise.all([
       fetchItems(),
       fetchTransactions(),
       fetchVendors(),
       fetchEvents(),
       fetchProjects(),
+      fetchIncomingRequests(),
       fetchPending(),
     ]);
     setItems(i);
@@ -2749,6 +2945,7 @@ export default function App() {
     setVendors(v);
     setEvents(e);
     setProjects(pr);
+    setIncoming(ic);
     setPending(p);
     if (role === "admin") {
       const u = await fetchAllProfiles();
@@ -2875,6 +3072,7 @@ export default function App() {
               items={items} setItems={setItems}
               transactions={transactions} setTransactions={setTransactions}
               vendors={vendors} projects={projects}
+              incoming={incoming} setIncoming={setIncoming}
               role={role} username={authUser.username}
               pending={pending} setPending={setPending}
             />
@@ -2895,6 +3093,7 @@ export default function App() {
             <ProjectsTab
               projects={projects} setProjects={setProjects}
               items={items} transactions={transactions} setTransactions={setTransactions}
+              incoming={incoming} setIncoming={setIncoming}
               role={role} username={authUser.username}
               pending={pending} setPending={setPending}
             />
@@ -2907,6 +3106,7 @@ export default function App() {
               vendors={vendors} setVendors={setVendors}
               events={events} setEvents={setEvents}
               projects={projects} setProjects={setProjects}
+              incoming={incoming} setIncoming={setIncoming}
             />
           )}
         </div>
