@@ -825,6 +825,10 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
   const [expandedItem, setExpandedItem] = useState(null);
   const [notice, setNotice] = useState("");
   const [incomingChoice, setIncomingChoice] = useState({});
+  const [auditMode, setAuditMode] = useState(false);
+  const [auditCounts, setAuditCounts] = useState({});
+  const [auditOnlyDiff, setAuditOnlyDiff] = useState(false);
+  const [auditApplying, setAuditApplying] = useState(false);
 
   const isMember = role === "member";
 
@@ -936,6 +940,61 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
   }
   function collapseAllGroups() {
     setExpandedGroups(new Set());
+  }
+
+  // 재고 실사: 입력한 실사 수량과 시스템 수량을 비교
+  const auditRows = useMemo(() => {
+    return filtered.map((it) => {
+      const sys = stockByItem[it.id] || 0;
+      const raw = auditCounts[it.id];
+      const counted = raw === undefined || raw === "" ? null : Number(raw);
+      const diff = counted === null || Number.isNaN(counted) ? null : counted - sys;
+      return { item: it, sys, counted, diff };
+    });
+  }, [filtered, auditCounts, stockByItem]);
+  const auditDiffRows = auditRows.filter((r) => r.diff !== null && r.diff !== 0);
+
+  function setAuditCount(itemId, val) {
+    setAuditCounts((prev) => ({ ...prev, [itemId]: val }));
+  }
+
+  async function applyAuditCorrections() {
+    if (auditDiffRows.length === 0) return;
+    setAuditApplying(true);
+
+    if (isMember) {
+      const newPending = [];
+      for (const row of auditDiffRows) {
+        const tx = {
+          id: uid(), itemId: row.item.id, type: row.diff > 0 ? "in" : "out", outType: null,
+          qty: Math.abs(row.diff), unit: null, date: todayStr(), vendorId: null, projectId: null,
+          note: "재고실사 보정", createdAt: new Date().toISOString(),
+        };
+        const created = await insertPending({
+          entity: "transaction", action: "create", targetId: null, payload: tx,
+          summary: `${row.item.name} 재고실사 보정 요청 (${row.diff > 0 ? "+" : ""}${row.diff})`,
+          requestedBy: username,
+        });
+        newPending.push(created);
+      }
+      setPending([...newPending, ...pending]);
+      setNotice(`재고실사 보정 요청 ${auditDiffRows.length}건이 접수되었습니다. 관리자 승인 후 반영됩니다.`);
+    } else {
+      const newTxs = [];
+      for (const row of auditDiffRows) {
+        const created = await insertTransaction({
+          itemId: row.item.id, type: row.diff > 0 ? "in" : "out", outType: null,
+          qty: Math.abs(row.diff), date: todayStr(), vendorId: null, note: "재고실사 보정",
+        });
+        newTxs.push(created);
+      }
+      setTransactions([...newTxs, ...transactions]);
+      setNotice(`재고실사 보정 ${auditDiffRows.length}건이 반영되었습니다.`);
+    }
+
+    setAuditApplying(false);
+    setAuditCounts({});
+    setAuditMode(false);
   }
 
   async function queueChange(entity, action, targetId, payload, summary) {
@@ -1073,6 +1132,12 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
         <GhostButton onClick={collapseAllGroups} style={{ padding: "9px 12px", fontSize: 12.5 }}>
           전체 접기
         </GhostButton>
+        <GhostButton
+          onClick={() => setAuditMode(!auditMode)}
+          style={{ padding: "9px 12px", fontSize: 12.5, ...(auditMode ? { background: "#14213D", color: "#fff" } : {}) }}
+        >
+          {auditMode ? "재고 실사 종료" : "재고 실사"}
+        </GhostButton>
         <PrimaryButton onClick={() => setShowItemForm(true)}>
           <Plus size={16} /> 새 품목 추가
         </PrimaryButton>
@@ -1080,6 +1145,78 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
           <FileDown size={15} /> 엑셀로 저장
         </GhostButton>
       </div>
+
+      {auditMode && (
+        <div style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: "16px 18px", marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
+            <div style={{ fontWeight: 800, fontSize: 14, color: "#14213D" }}>재고 실사 모드</div>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "#6B7280", cursor: "pointer" }}>
+              <input type="checkbox" checked={auditOnlyDiff} onChange={(e) => setAuditOnlyDiff(e.target.checked)} style={{ width: 14, height: 14, cursor: "pointer" }} />
+              차이 있는 항목만 보기
+            </label>
+          </div>
+          <div style={{ fontSize: 11.5, color: "#A2A9B8", marginBottom: 12 }}>
+            창고를 위치 순서대로 돌면서 실제로 세어본 수량을 입력하세요. 입력하지 않은 품목은 그대로 둡니다.
+          </div>
+          <div className="table-scroll">
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ color: "#8A93A6", textAlign: "left" }}>
+                  <th style={{ padding: "4px 8px", fontWeight: 700, fontSize: 11.5 }}>품목</th>
+                  <th style={{ padding: "4px 8px", fontWeight: 700, fontSize: 11.5 }}>위치</th>
+                  <th style={{ padding: "4px 8px", fontWeight: 700, fontSize: 11.5, textAlign: "right" }}>시스템 수량</th>
+                  <th style={{ padding: "4px 8px", fontWeight: 700, fontSize: 11.5, textAlign: "right" }}>실사 수량</th>
+                  <th style={{ padding: "4px 8px", fontWeight: 700, fontSize: 11.5 }}>차이</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditRows
+                  .filter((r) => !auditOnlyDiff || (r.diff !== null && r.diff !== 0))
+                  .map((r) => (
+                    <tr key={r.item.id} style={{ borderTop: "1px solid #F1F2F5" }}>
+                      <td style={{ padding: "6px 8px", fontWeight: 600, color: "#14213D" }}>{r.item.name}</td>
+                      <td style={{ padding: "6px 8px", color: "#6B7280" }}>{r.item.location || "-"}</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "ui-monospace, monospace", color: "#6B7280" }}>{r.sys} {r.item.unit}</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                        <TextInput
+                          type="number"
+                          value={auditCounts[r.item.id] ?? ""}
+                          onChange={(e) => setAuditCount(r.item.id, e.target.value)}
+                          placeholder="입력"
+                          style={{ width: 80, textAlign: "right" }}
+                        />
+                      </td>
+                      <td style={{ padding: "6px 8px" }}>
+                        {r.diff === null ? (
+                          <span style={{ color: "#C4CBD4" }}>-</span>
+                        ) : r.diff === 0 ? (
+                          <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>일치</span>
+                        ) : (
+                          <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: r.diff > 0 ? "#EAF7F5" : "#FCEBEC", color: r.diff > 0 ? "#2A9D8F" : "#E63946" }}>
+                            {r.diff > 0 ? `+${r.diff}` : r.diff}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14, flexWrap: "wrap", gap: 8 }}>
+            <span style={{ fontSize: 12.5, color: "#8A93A6" }}>차이 있는 항목 {auditDiffRows.length}건</span>
+            <div style={{ display: "flex", gap: 8 }}>
+              <GhostButton onClick={() => { setAuditMode(false); setAuditCounts({}); }}>실사 종료</GhostButton>
+              <PrimaryButton
+                onClick={applyAuditCorrections}
+                disabled={auditDiffRows.length === 0 || auditApplying}
+                style={{ opacity: auditDiffRows.length === 0 || auditApplying ? 0.5 : 1 }}
+              >
+                {auditApplying ? "처리 중..." : isMember ? `보정 요청 (${auditDiffRows.length}건)` : `일괄 보정 (${auditDiffRows.length}건)`}
+              </PrimaryButton>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
         <div className="table-scroll">
@@ -1268,6 +1405,22 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                     </div>
                     <div style={{ fontSize: 11.5, color: "#A2A9B8", marginBottom: 8 }}>
                       전체 수량 중 일부만 창고로 입고하고 나머지는 현장(프로젝트)으로 바로 보낼 수 있습니다.
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+                      <button
+                        type="button"
+                        onClick={() => setChoice(req.id, { warehouseQty: req.qty })}
+                        style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#2A9D8F" }}
+                      >
+                        전체 창고로
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setChoice(req.id, { warehouseQty: 0 })}
+                        style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#3B82F6" }}
+                      >
+                        전체 현장으로
+                      </button>
                     </div>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1902,9 +2055,10 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
         });
         newTxs.push(created);
       } else if (row.ordered && row.customName) {
-        // 직접입력한(재고 미등록) 장비 중 체크된 것: 입고예정으로 등록
+        // 직접입력한(재고 미등록) 장비 중 체크된 것: 입고예정으로 등록 (발주수량이 필요수량보다 많으면 예비 포함)
+        const orderQty = row.orderQty && row.orderQty > 0 ? row.orderQty : row.qty;
         const createdIncoming = await insertIncomingRequest({
-          projectId: project.id, name: row.customName, qty: row.qty, unit: null,
+          projectId: project.id, name: row.customName, qty: orderQty, unit: null,
         });
         newIncoming.push(createdIncoming);
       }
@@ -1945,6 +2099,17 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
     const newItems = project.items.map((r, i) => (i === rowIdx ? { ...r, ordered: !r.ordered } : r));
     if (isMember) {
       await queueChange("edit", project.id, { ...project, items: newItems }, `프로젝트 '${project.name}' 발주 체크 변경 요청`);
+      return;
+    }
+    const updated = await updateProject(project.id, { ...project, items: newItems });
+    setProjects(projects.map((p) => (p.id === project.id ? updated : p)));
+  }
+
+  async function setOrderQty(project, rowIdx, val) {
+    const num = Number(val);
+    const newItems = project.items.map((r, i) => (i === rowIdx ? { ...r, orderQty: val === "" || Number.isNaN(num) ? undefined : num } : r));
+    if (isMember) {
+      await queueChange("edit", project.id, { ...project, items: newItems }, `프로젝트 '${project.name}' 발주수량 변경 요청`);
       return;
     }
     const updated = await updateProject(project.id, { ...project, items: newItems });
@@ -2166,6 +2331,20 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                     </label>
                                     {!row.ordered && (
                                       <div style={{ fontSize: 10.5, color: "#A2A9B8", marginTop: 2 }}>체크 후 "반영"하면 재고관리 &gt; 입고예정에 등록됩니다</div>
+                                    )}
+                                    {row.ordered && (
+                                      <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                                        <span style={{ fontSize: 10.5, color: "#8A93A6" }}>발주수량</span>
+                                        <TextInput
+                                          type="number" min={1}
+                                          value={row.orderQty ?? row.qty}
+                                          onChange={(e) => setOrderQty(p, idx, e.target.value)}
+                                          style={{ width: 60, padding: "3px 6px", fontSize: 11.5 }}
+                                        />
+                                        {Number(row.orderQty) > row.qty && (
+                                          <span style={{ fontSize: 10.5, color: "#8A93A6" }}>(예비 +{Number(row.orderQty) - row.qty})</span>
+                                        )}
+                                      </div>
                                     )}
                                   </div>
                                 ) : row.ordered || short > 0 ? (
@@ -2953,8 +3132,9 @@ function AdminTab({
               });
               newTxs.push(created);
             } else if (row.ordered && row.customName) {
+              const orderQty = row.orderQty && row.orderQty > 0 ? row.orderQty : row.qty;
               const createdIncoming = await insertIncomingRequest({
-                projectId: project.id, name: row.customName, qty: row.qty, unit: null,
+                projectId: project.id, name: row.customName, qty: orderQty, unit: null,
               });
               newIncoming.push(createdIncoming);
             }
