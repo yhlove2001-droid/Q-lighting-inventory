@@ -839,6 +839,22 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
     setIncomingChoice((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
   }
 
+  async function setExpectedDate(req, date) {
+    if (isMember) {
+      const created = await insertPending({
+        entity: "incoming", action: "edit", targetId: req.id,
+        payload: { expectedDate: date || null },
+        summary: `입고예정 '${req.name}' 예상 입고일 변경 요청 (${date || "미정"})`,
+        requestedBy: username,
+      });
+      setPending([created, ...pending]);
+      setNotice("예상 입고일 변경 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
+      return;
+    }
+    const updated = await updateIncomingRequest(req.id, { expectedDate: date || null });
+    setIncoming(incoming.map((r) => (r.id === req.id ? updated : r)));
+  }
+
   async function confirmIncoming(req) {
     const choice = incomingChoice[req.id] || {};
     const whQty = choice.warehouseQty !== undefined && choice.warehouseQty !== "" ? Number(choice.warehouseQty) : req.qty;
@@ -1241,6 +1257,15 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                         )}
                       </div>
                     </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                      <span style={{ fontSize: 12.5, color: "#6B7280", fontWeight: 600 }}>예상 입고일</span>
+                      <TextInput
+                        type="date"
+                        value={req.expectedDate || ""}
+                        onChange={(e) => setExpectedDate(req, e.target.value)}
+                        style={{ width: 160 }}
+                      />
+                    </div>
                     <div style={{ fontSize: 11.5, color: "#A2A9B8", marginBottom: 8 }}>
                       전체 수량 중 일부만 창고로 입고하고 나머지는 현장(프로젝트)으로 바로 보낼 수 있습니다.
                     </div>
@@ -1614,7 +1639,12 @@ function ProjectFormModal({ initial, items, onSave, onClose }) {
   const [dueDate, setDueDate] = useState(initial?.dueDate || "");
   const [rows, setRows] = useState(
     initial?.items?.length
-      ? initial.items.map((r) => ({ itemId: r.itemId || "", customName: r.customName || "", qty: r.qty, ordered: !!r.ordered }))
+      ? initial.items.map((r) => ({
+          itemId: r.itemId ? r.itemId : (r.customName ? "__custom__" : ""),
+          customName: r.customName || "",
+          qty: r.qty,
+          ordered: !!r.ordered,
+        }))
       : [{ itemId: "", customName: "", qty: 1, ordered: false }]
   );
 
@@ -2978,6 +3008,10 @@ function AdminTab({
           });
           setIncoming(incoming.map((r) => (r.id === req.id ? updatedReq : r)));
         }
+      }
+      if (p.action === "edit") {
+        const updatedReq = await updateIncomingRequest(p.targetId, p.payload);
+        setIncoming(incoming.map((r) => (r.id === p.targetId ? updatedReq : r)));
       }
     }
     await deletePendingRow(p.id);

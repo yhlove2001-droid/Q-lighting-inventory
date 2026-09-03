@@ -189,6 +189,7 @@ function rowToIncoming(r) {
     status: r.status, destination: r.destination || null, location: r.location || null,
     warehouseQty: r.warehouse_qty != null ? Number(r.warehouse_qty) : null,
     projectQty: r.project_qty != null ? Number(r.project_qty) : null,
+    expectedDate: r.expected_date || null,
     itemId: r.item_id || null, receivedAt: r.received_at || null, createdAt: r.created_at,
   };
 }
@@ -211,6 +212,7 @@ export async function updateIncomingRequest(id, patch) {
   if ("location" in patch) dbPatch.location = patch.location;
   if ("warehouseQty" in patch) dbPatch.warehouse_qty = patch.warehouseQty;
   if ("projectQty" in patch) dbPatch.project_qty = patch.projectQty;
+  if ("expectedDate" in patch) dbPatch.expected_date = patch.expectedDate;
   if ("itemId" in patch) dbPatch.item_id = patch.itemId;
   if ("receivedAt" in patch) dbPatch.received_at = patch.receivedAt;
   const { data, error } = await supabase.from("incoming_requests").update(dbPatch).eq("id", id).select().single();
