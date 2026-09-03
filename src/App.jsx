@@ -1372,6 +1372,30 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
       {(() => {
         const pendingIncoming = incoming.filter((r) => r.status === "pending");
         if (pendingIncoming.length === 0) return null;
+
+        // 프로젝트별로 묶기
+        const groupMap = {};
+        for (const req of pendingIncoming) {
+          const key = req.projectId || "__none__";
+          if (!groupMap[key]) groupMap[key] = [];
+          groupMap[key].push(req);
+        }
+        const incomingGroups = Object.keys(groupMap).map((key) => ({
+          key,
+          label: key === "__none__" ? "프로젝트 없음" : (projectNameFor(key) || "삭제된 프로젝트"),
+          list: groupMap[key],
+        }));
+
+        function setGroupAll(list, warehouseQty) {
+          setIncomingChoice((prev) => {
+            const next = { ...prev };
+            for (const req of list) {
+              next[req.id] = { ...next[req.id], warehouseQty };
+            }
+            return next;
+          });
+        }
+
         return (
           <div style={{ marginTop: 24 }}>
             <datalist id="location-options-incoming">
@@ -1380,105 +1404,128 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
             <div style={{ fontWeight: 800, fontSize: 15, color: "#14213D", marginBottom: 10 }}>
               입고예정 ({pendingIncoming.length}건)
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {pendingIncoming.map((req) => {
-                const choice = incomingChoice[req.id] || {};
-                const isPendingRequest = pending.some((p) => p.entity === "incoming" && p.targetId === req.id);
-                const whQty = choice.warehouseQty !== undefined && choice.warehouseQty !== "" ? Number(choice.warehouseQty) : req.qty;
-                const validWhQty = !Number.isNaN(whQty) && whQty >= 0 && whQty <= req.qty;
-                const projQty = validWhQty ? req.qty - whQty : null;
-                return (
-                  <div key={req.id} style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: "14px 16px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-                      <div>
-                        <span style={{ fontWeight: 700, fontSize: 14, color: "#14213D" }}>{req.name}</span>
-                        <span style={{ marginLeft: 8, fontFamily: "ui-monospace, monospace", color: "#8A93A6", fontSize: 12.5 }}>총 수량 {req.qty}{req.unit ? ` ${req.unit}` : ""}</span>
-                        {req.projectId && projectNameFor(req.projectId) && (
-                          <span style={{ marginLeft: 8, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#EAF1FE", color: "#0EA5E9" }}>
-                            {projectNameFor(req.projectId)}
-                          </span>
-                        )}
-                        {req.itemId && (
-                          <span style={{ marginLeft: 8, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>
-                            기존 재고 품목 (예비 발주)
-                          </span>
-                        )}
-                        {isPendingRequest && (
-                          <span style={{ marginLeft: 8, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>
-                            승인대기
-                          </span>
-                        )}
-                      </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+              {incomingGroups.map((group) => (
+                <div key={group.key}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontWeight: 700, fontSize: 13, color: "#0EA5E9" }}>{group.label}</span>
+                      <span style={{ fontSize: 11.5, color: "#A2A9B8" }}>{group.list.length}건</span>
                     </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                      <span style={{ fontSize: 12.5, color: "#6B7280", fontWeight: 600 }}>예상 입고일</span>
-                      <TextInput
-                        type="date"
-                        value={req.expectedDate || ""}
-                        onChange={(e) => setExpectedDate(req, e.target.value)}
-                        style={{ width: 160 }}
-                      />
-                    </div>
-                    <div style={{ fontSize: 11.5, color: "#A2A9B8", marginBottom: 8 }}>
-                      전체 수량 중 일부만 창고로 입고하고 나머지는 현장(프로젝트)으로 바로 보낼 수 있습니다.
-                    </div>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+                    <div style={{ display: "flex", gap: 6 }}>
                       <button
                         type="button"
-                        onClick={() => setChoice(req.id, { warehouseQty: req.qty })}
+                        onClick={() => setGroupAll(group.list, undefined)}
                         style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#2A9D8F" }}
                       >
-                        전체 창고로
+                        이 프로젝트 전체 창고로
                       </button>
                       <button
                         type="button"
-                        onClick={() => setChoice(req.id, { warehouseQty: 0 })}
+                        onClick={() => setGroupAll(group.list, 0)}
                         style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#3B82F6" }}
                       >
-                        전체 현장으로
+                        이 프로젝트 전체 현장으로
                       </button>
                     </div>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ fontSize: 12.5, color: "#2A9D8F", fontWeight: 700 }}>창고로</span>
-                        <TextInput
-                          type="number" min={0} max={req.qty}
-                          value={choice.warehouseQty !== undefined ? choice.warehouseQty : req.qty}
-                          onChange={(e) => setChoice(req.id, { warehouseQty: e.target.value })}
-                          style={{ width: 70 }}
-                        />
-                        <span style={{ fontSize: 12, color: "#8A93A6" }}>{req.unit || ""}</span>
-                      </div>
-                      <span style={{ fontSize: 12.5, color: "#8A93A6" }}>/</span>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ fontSize: 12.5, color: "#3B82F6", fontWeight: 700 }}>현장 직접 전달</span>
-                        <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: "#14213D" }}>
-                          {validWhQty ? projQty : "-"}{req.unit || ""}
-                        </span>
-                      </div>
-                      {validWhQty && whQty > 0 && !req.itemId && (
-                        <TextInput
-                          value={choice.location || ""}
-                          onChange={(e) => setChoice(req.id, { location: e.target.value })}
-                          placeholder="창고 위치 (예: A-1)"
-                          list="location-options-incoming"
-                          style={{ width: 150 }}
-                        />
-                      )}
-                      {validWhQty && whQty > 0 && req.itemId && (
-                        <span style={{ fontSize: 11.5, color: "#8A93A6" }}>기존 재고 품목에 바로 추가됩니다</span>
-                      )}
-                      <PrimaryButton
-                        onClick={() => confirmIncoming(req)}
-                        disabled={!validWhQty || (whQty > 0 && !req.itemId && !choice.location) || isPendingRequest}
-                        style={{ opacity: !validWhQty || (whQty > 0 && !req.itemId && !choice.location) || isPendingRequest ? 0.5 : 1 }}
-                      >
-                        {isMember ? "처리 요청" : "확정"}
-                      </PrimaryButton>
-                    </div>
                   </div>
-                );
-              })}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {group.list.map((req) => {
+                      const choice = incomingChoice[req.id] || {};
+                      const isPendingRequest = pending.some((p) => p.entity === "incoming" && p.targetId === req.id);
+                      const whQty = choice.warehouseQty !== undefined && choice.warehouseQty !== "" ? Number(choice.warehouseQty) : req.qty;
+                      const validWhQty = !Number.isNaN(whQty) && whQty >= 0 && whQty <= req.qty;
+                      const projQty = validWhQty ? req.qty - whQty : null;
+                      return (
+                        <div key={req.id} style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: "14px 16px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                            <div>
+                              <span style={{ fontWeight: 700, fontSize: 14, color: "#14213D" }}>{req.name}</span>
+                              <span style={{ marginLeft: 8, fontFamily: "ui-monospace, monospace", color: "#8A93A6", fontSize: 12.5 }}>총 수량 {req.qty}{req.unit ? ` ${req.unit}` : ""}</span>
+                              {req.itemId && (
+                                <span style={{ marginLeft: 8, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>
+                                  기존 재고 품목 (예비 발주)
+                                </span>
+                              )}
+                              {isPendingRequest && (
+                                <span style={{ marginLeft: 8, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>
+                                  승인대기
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                            <span style={{ fontSize: 12.5, color: "#6B7280", fontWeight: 600 }}>예상 입고일</span>
+                            <TextInput
+                              type="date"
+                              value={req.expectedDate || ""}
+                              onChange={(e) => setExpectedDate(req, e.target.value)}
+                              style={{ width: 160 }}
+                            />
+                          </div>
+                          <div style={{ fontSize: 11.5, color: "#A2A9B8", marginBottom: 8 }}>
+                            전체 수량 중 일부만 창고로 입고하고 나머지는 현장(프로젝트)으로 바로 보낼 수 있습니다.
+                          </div>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+                            <button
+                              type="button"
+                              onClick={() => setChoice(req.id, { warehouseQty: req.qty })}
+                              style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#2A9D8F" }}
+                            >
+                              전체 창고로
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setChoice(req.id, { warehouseQty: 0 })}
+                              style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#3B82F6" }}
+                            >
+                              전체 현장으로
+                            </button>
+                          </div>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <span style={{ fontSize: 12.5, color: "#2A9D8F", fontWeight: 700 }}>창고로</span>
+                              <TextInput
+                                type="number" min={0} max={req.qty}
+                                value={choice.warehouseQty !== undefined ? choice.warehouseQty : req.qty}
+                                onChange={(e) => setChoice(req.id, { warehouseQty: e.target.value })}
+                                style={{ width: 70 }}
+                              />
+                              <span style={{ fontSize: 12, color: "#8A93A6" }}>{req.unit || ""}</span>
+                            </div>
+                            <span style={{ fontSize: 12.5, color: "#8A93A6" }}>/</span>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <span style={{ fontSize: 12.5, color: "#3B82F6", fontWeight: 700 }}>현장 직접 전달</span>
+                              <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: "#14213D" }}>
+                                {validWhQty ? projQty : "-"}{req.unit || ""}
+                              </span>
+                            </div>
+                            {validWhQty && whQty > 0 && !req.itemId && (
+                              <TextInput
+                                value={choice.location || ""}
+                                onChange={(e) => setChoice(req.id, { location: e.target.value })}
+                                placeholder="창고 위치 (예: A-1)"
+                                list="location-options-incoming"
+                                style={{ width: 150 }}
+                              />
+                            )}
+                            {validWhQty && whQty > 0 && req.itemId && (
+                              <span style={{ fontSize: 11.5, color: "#8A93A6" }}>기존 재고 품목에 바로 추가됩니다</span>
+                            )}
+                            <PrimaryButton
+                              onClick={() => confirmIncoming(req)}
+                              disabled={!validWhQty || (whQty > 0 && !req.itemId && !choice.location) || isPendingRequest}
+                              style={{ opacity: !validWhQty || (whQty > 0 && !req.itemId && !choice.location) || isPendingRequest ? 0.5 : 1 }}
+                            >
+                              {isMember ? "처리 요청" : "확정"}
+                            </PrimaryButton>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         );
@@ -1933,7 +1980,7 @@ function ProjectFormModal({ initial, items, onSave, onClose }) {
 }
 
 // ---------- Projects tab ----------
-function ProjectsTab({ projects, setProjects, items, transactions, setTransactions, incoming = [], setIncoming, role, username, pending, setPending }) {
+function ProjectsTab({ projects, setProjects, items, transactions, setTransactions, incoming = [], setIncoming, role, username, pending, setPending, onGoToInventory }) {
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editProject, setEditProject] = useState(null);
@@ -2368,14 +2415,14 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                         background: row.ordered ? "#EAF7F5" : "#EAF1FE",
                                         color: row.ordered ? "#2A9D8F" : "#3B82F6",
                                       }}>
-                                        {row.ordered ? "입고예정 등록됨" : "재고 미등록"}
+                                        {row.ordered ? "발주함 · 미입고" : "재고 미등록"}
                                       </span>
                                     </label>
                                     {!row.ordered && (
                                       <div style={{ fontSize: 10.5, color: "#A2A9B8", marginTop: 2 }}>체크 후 "반영"하면 재고관리 &gt; 입고예정에 등록됩니다</div>
                                     )}
                                     {row.ordered && (
-                                      <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                                      <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
                                         <span style={{ fontSize: 10.5, color: "#8A93A6" }}>발주수량</span>
                                         <TextInput
                                           type="number" min={1}
@@ -2383,6 +2430,15 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                           onChange={(e) => setOrderQty(p, idx, e.target.value)}
                                           style={{ width: 60, padding: "3px 6px", fontSize: 11.5 }}
                                         />
+                                        {onGoToInventory && (
+                                          <button
+                                            type="button"
+                                            onClick={onGoToInventory}
+                                            style={{ border: "none", background: "none", cursor: "pointer", color: "#3B82F6", fontSize: 10.5, fontWeight: 700, textDecoration: "underline" }}
+                                          >
+                                            재고관리 &gt; 입고예정에서 확인
+                                          </button>
+                                        )}
                                       </div>
                                     )}
                                   </div>
@@ -2401,14 +2457,14 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                         background: row.ordered ? "#EAF7F5" : "#FCEBEC",
                                         color: row.ordered ? "#2A9D8F" : "#E63946",
                                       }}>
-                                        {row.ordered ? `발주완료 (${row.orderQty ?? ownShort}${info.unit ? ` ${info.unit}` : ""})` : `추가 발주 필요 (부족 ${short})`}
+                                        {row.ordered ? `발주함 · 미입고 (${row.orderQty ?? ownShort}${info.unit ? ` ${info.unit}` : ""})` : `추가 발주 필요 (부족 ${short})`}
                                       </span>
                                     </label>
                                     {!row.ordered && sharedWithOthers && (
                                       <div style={{ fontSize: 10.5, color: "#A2A9B8", marginTop: 2 }}>다른 프로젝트 수요 포함 (전체 필요 {totalDemand})</div>
                                     )}
                                     {row.ordered && (
-                                      <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                                      <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
                                         <span style={{ fontSize: 10.5, color: "#8A93A6" }}>발주수량</span>
                                         <TextInput
                                           type="number" min={1}
@@ -2416,6 +2472,15 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                           onChange={(e) => setOrderQty(p, idx, e.target.value)}
                                           style={{ width: 60, padding: "3px 6px", fontSize: 11.5 }}
                                         />
+                                        {onGoToInventory && (
+                                          <button
+                                            type="button"
+                                            onClick={onGoToInventory}
+                                            style={{ border: "none", background: "none", cursor: "pointer", color: "#3B82F6", fontSize: 10.5, fontWeight: 700, textDecoration: "underline" }}
+                                          >
+                                            재고관리 &gt; 입고예정에서 확인
+                                          </button>
+                                        )}
                                       </div>
                                     )}
                                   </div>
@@ -3422,9 +3487,10 @@ export default function App() {
   const role = authUser.role;
   const isAdmin = role === "admin";
 
+  const pendingIncomingCount = incoming.filter((r) => r.status === "pending").length;
   const navItems = [
     { id: "dashboard", label: "대시보드", icon: LayoutDashboard },
-    { id: "inventory", label: "재고관리", icon: Package },
+    { id: "inventory", label: "재고관리", icon: Package, badge: pendingIncomingCount || undefined },
     { id: "vendors", label: "거래처관리", icon: Truck },
     { id: "calendar", label: "달력", icon: CalendarDays },
     { id: "projects", label: "프로젝트", icon: FolderKanban },
@@ -3532,6 +3598,7 @@ export default function App() {
               incoming={incoming} setIncoming={setIncoming}
               role={role} username={authUser.username}
               pending={pending} setPending={setPending}
+              onGoToInventory={() => setTab("inventory")}
             />
           ) : (
             <AdminTab
