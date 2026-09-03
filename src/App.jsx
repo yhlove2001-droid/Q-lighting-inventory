@@ -842,7 +842,11 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
   async function queueChange(entity, action, targetId, payload, summary) {
     const created = await insertPending({ entity, action, targetId, payload, summary, requestedBy: username });
     setPending([created, ...pending]);
-    setNotice(action === "edit" ? "수정 요청이 접수되었습니다. 관리자 승인 후 반영됩니다." : "삭제 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
+    setNotice(
+      action === "create" ? "등록 요청이 접수되었습니다. 관리자 승인 후 반영됩니다."
+      : action === "edit" ? "수정 요청이 접수되었습니다. 관리자 승인 후 반영됩니다."
+      : "삭제 요청이 접수되었습니다. 관리자 승인 후 반영됩니다."
+    );
   }
 
   function hasPending(entity, targetId) {
@@ -851,8 +855,9 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
 
   async function saveItem(item) {
     const exists = items.some((i) => i.id === item.id);
-    if (exists && isMember) {
-      await queueChange("item", "edit", item.id, item, `품목 '${item.name}' 수정 요청`);
+    if (isMember) {
+      if (exists) await queueChange("item", "edit", item.id, item, `품목 '${item.name}' 수정 요청`);
+      else await queueChange("item", "create", null, item, `품목 '${item.name}' 등록 요청`);
       setShowItemForm(false);
       setEditItem(null);
       return;
@@ -883,9 +888,10 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
 
   async function saveTx(tx) {
     const exists = transactions.some((t) => t.id === tx.id);
-    if (exists && isMember) {
-      const itemLabel = txModal?.item?.name || "";
-      await queueChange("transaction", "edit", tx.id, tx, `${itemLabel} 입출고 기록 수정 요청 (${tx.date})`);
+    const itemLabel = txModal?.item?.name || "";
+    if (isMember) {
+      if (exists) await queueChange("transaction", "edit", tx.id, tx, `${itemLabel} 입출고 기록 수정 요청 (${tx.date})`);
+      else await queueChange("transaction", "create", null, tx, `${itemLabel} 입출고 등록 요청 (${tx.type === "in" ? "입고" : "출고"} ${tx.qty})`);
       setTxModal(null);
       return;
     }
@@ -1269,16 +1275,39 @@ const th = { padding: "10px 14px", fontSize: 12, fontWeight: 700, letterSpacing:
 const td = { padding: "10px 14px", verticalAlign: "middle" };
 
 // ---------- Vendors tab ----------
-function VendorsTab({ vendors, setVendors }) {
+function VendorsTab({ vendors, setVendors, role, username, pending, setPending }) {
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editVendor, setEditVendor] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [notice, setNotice] = useState("");
+  const isMember = role === "member";
 
   const filtered = vendors.filter((v) => v.name.toLowerCase().includes(search.toLowerCase()));
 
+  function hasPending(targetId) {
+    return pending.some((p) => p.entity === "vendor" && p.targetId === targetId);
+  }
+
+  async function queueChange(action, targetId, payload, summary) {
+    const created = await insertPending({ entity: "vendor", action, targetId, payload, summary, requestedBy: username });
+    setPending([created, ...pending]);
+    setNotice(
+      action === "create" ? "등록 요청이 접수되었습니다. 관리자 승인 후 반영됩니다."
+      : action === "edit" ? "수정 요청이 접수되었습니다. 관리자 승인 후 반영됩니다."
+      : "삭제 요청이 접수되었습니다. 관리자 승인 후 반영됩니다."
+    );
+  }
+
   async function saveVendor(vendor) {
     const exists = vendors.some((v) => v.id === vendor.id);
+    if (isMember) {
+      if (exists) await queueChange("edit", vendor.id, vendor, `거래처 '${vendor.name}' 수정 요청`);
+      else await queueChange("create", null, vendor, `거래처 '${vendor.name}' 등록 요청`);
+      setShowForm(false);
+      setEditVendor(null);
+      return;
+    }
     if (exists) {
       const updated = await updateVendor(vendor.id, vendor);
       setVendors(vendors.map((v) => (v.id === vendor.id ? updated : v)));
@@ -1291,6 +1320,12 @@ function VendorsTab({ vendors, setVendors }) {
   }
 
   async function deleteVendor(id) {
+    if (isMember) {
+      const v = vendors.find((x) => x.id === id);
+      await queueChange("delete", id, null, `거래처 '${v?.name || ""}' 삭제 요청`);
+      setDeleteTarget(null);
+      return;
+    }
     await deleteVendorRow(id);
     setVendors(vendors.filter((v) => v.id !== id));
     setDeleteTarget(null);
@@ -1298,6 +1333,16 @@ function VendorsTab({ vendors, setVendors }) {
 
   return (
     <div>
+      {notice && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          background: "#EAF1FE", border: "1px solid #C9DCFB", color: "#2554A8",
+          borderRadius: 8, padding: "10px 14px", fontSize: 12.5, fontWeight: 600, marginBottom: 14,
+        }}>
+          <span>{notice}</span>
+          <button onClick={() => setNotice("")} style={{ border: "none", background: "none", cursor: "pointer", color: "#2554A8" }}><X size={14} /></button>
+        </div>
+      )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 12, flexWrap: "wrap" }}>
         <div style={{ position: "relative", flex: "1 1 240px", maxWidth: 320 }}>
           <Search size={15} color="#A2A9B8" style={{ position: "absolute", left: 11, top: 11 }} />
@@ -1309,7 +1354,7 @@ function VendorsTab({ vendors, setVendors }) {
           />
         </div>
         <PrimaryButton onClick={() => setShowForm(true)}>
-          <Plus size={16} /> 새 거래처 추가
+          <Plus size={16} /> 새 거래처 {isMember ? "요청" : "추가"}
         </PrimaryButton>
       </div>
 
@@ -1332,15 +1377,20 @@ function VendorsTab({ vendors, setVendors }) {
             )}
             {filtered.map((v) => (
               <tr key={v.id} style={{ borderTop: "1px solid #F1F2F5" }}>
-                <td style={{ ...td, fontWeight: 700, color: "#14213D" }}>{v.name}</td>
+                <td style={{ ...td, fontWeight: 700, color: "#14213D" }}>
+                  {v.name}
+                  {hasPending(v.id) && (
+                    <span style={{ marginLeft: 6, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>승인대기</span>
+                  )}
+                </td>
                 <td style={{ ...td, color: "#6B7280" }}>{v.contact || "-"}</td>
                 <td style={{ ...td, color: "#6B7280", fontFamily: "ui-monospace, monospace" }}>{v.phone || "-"}</td>
                 <td style={{ ...td, color: "#6B7280" }}>{v.email || "-"}</td>
                 <td style={{ ...td, color: "#6B7280" }}>{v.address || "-"}</td>
                 <td style={{ ...td, textAlign: "right" }}>
                   <div style={{ display: "inline-flex", gap: 6 }}>
-                    <IconBtn title="수정" color="#6B7280" onClick={() => setEditVendor(v)}><Edit2 size={14} /></IconBtn>
-                    <IconBtn title="삭제" color="#6B7280" onClick={() => setDeleteTarget(v)}><Trash2 size={14} /></IconBtn>
+                    <IconBtn title={isMember ? "수정 요청" : "수정"} color="#6B7280" onClick={() => setEditVendor(v)}><Edit2 size={14} /></IconBtn>
+                    <IconBtn title={isMember ? "삭제 요청" : "삭제"} color="#6B7280" onClick={() => setDeleteTarget(v)}><Trash2 size={14} /></IconBtn>
                   </div>
                 </td>
               </tr>
@@ -1354,7 +1404,9 @@ function VendorsTab({ vendors, setVendors }) {
       {editVendor && <VendorFormModal initial={editVendor} onSave={saveVendor} onClose={() => setEditVendor(null)} />}
       {deleteTarget && (
         <ConfirmDialog
-          text={`'${deleteTarget.name}' 거래처를 삭제하시겠습니까?`}
+          text={isMember
+            ? `'${deleteTarget.name}' 거래처 삭제를 관리자에게 요청하시겠습니까?`
+            : `'${deleteTarget.name}' 거래처를 삭제하시겠습니까?`}
           onConfirm={() => deleteVendor(deleteTarget.id)}
           onClose={() => setDeleteTarget(null)}
         />
@@ -1487,11 +1539,13 @@ function ProjectFormModal({ initial, items, onSave, onClose }) {
 }
 
 // ---------- Projects tab ----------
-function ProjectsTab({ projects, setProjects, items, transactions, setTransactions, username }) {
+function ProjectsTab({ projects, setProjects, items, transactions, setTransactions, role, username, pending, setPending }) {
   const [showForm, setShowForm] = useState(false);
   const [editProject, setEditProject] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [applying, setApplying] = useState(null);
+  const [notice, setNotice] = useState("");
+  const isMember = role === "member";
 
   const stockByItem = useMemo(() => computeStockByItem(transactions), [transactions]);
 
@@ -1503,8 +1557,30 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
     return { name: it?.name || "삭제된 품목", unit: it?.unit || "EA", custom: false };
   }
 
+  function hasPending(targetId) {
+    return pending.some((p) => p.entity === "project" && p.targetId === targetId);
+  }
+
+  async function queueChange(action, targetId, payload, summary) {
+    const created = await insertPending({ entity: "project", action, targetId, payload, summary, requestedBy: username });
+    setPending([created, ...pending]);
+    setNotice(
+      action === "create" ? "프로젝트 등록 요청이 접수되었습니다. 관리자 승인 후 반영됩니다."
+      : action === "edit" ? "프로젝트 수정 요청이 접수되었습니다. 관리자 승인 후 반영됩니다."
+      : action === "apply" ? "반영 요청이 접수되었습니다. 관리자 승인 후 재고에 반영됩니다."
+      : "삭제 요청이 접수되었습니다. 관리자 승인 후 반영됩니다."
+    );
+  }
+
   async function saveProject(project) {
     const exists = projects.some((p) => p.id === project.id);
+    if (isMember) {
+      if (exists) await queueChange("edit", project.id, project, `프로젝트 '${project.name}' 수정 요청`);
+      else await queueChange("create", null, project, `프로젝트 '${project.name}' 등록 요청`);
+      setShowForm(false);
+      setEditProject(null);
+      return;
+    }
     if (exists) {
       const updated = await updateProject(project.id, project);
       setProjects(projects.map((p) => (p.id === project.id ? updated : p)));
@@ -1517,6 +1593,12 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
   }
 
   async function deleteProject(id) {
+    if (isMember) {
+      const p = projects.find((x) => x.id === id);
+      await queueChange("delete", id, null, `프로젝트 '${p?.name || ""}' 삭제 요청`);
+      setDeleteTarget(null);
+      return;
+    }
     const relatedTx = transactions.filter((t) => t.projectId === id);
     for (const t of relatedTx) {
       await deleteTransactionRow(t.id);
@@ -1531,6 +1613,10 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
   }
 
   async function applyProject(project) {
+    if (isMember) {
+      await queueChange("apply", project.id, null, `프로젝트 '${project.name}' 반영 요청`);
+      return;
+    }
     setApplying(project.id);
     const today = todayStr();
     const newTxs = [];
@@ -1551,6 +1637,10 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
 
   async function toggleOrdered(project, rowIdx) {
     const newItems = project.items.map((r, i) => (i === rowIdx ? { ...r, ordered: !r.ordered } : r));
+    if (isMember) {
+      await queueChange("edit", project.id, { ...project, items: newItems }, `프로젝트 '${project.name}' 발주 체크 변경 요청`);
+      return;
+    }
     const updated = await updateProject(project.id, { ...project, items: newItems });
     setProjects(projects.map((p) => (p.id === project.id ? updated : p)));
   }
@@ -1589,12 +1679,22 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
 
   return (
     <div>
+      {notice && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          background: "#EAF1FE", border: "1px solid #C9DCFB", color: "#2554A8",
+          borderRadius: 8, padding: "10px 14px", fontSize: 12.5, fontWeight: 600, marginBottom: 14,
+        }}>
+          <span>{notice}</span>
+          <button onClick={() => setNotice("")} style={{ border: "none", background: "none", cursor: "pointer", color: "#2554A8" }}><X size={14} /></button>
+        </div>
+      )}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
         <GhostButton onClick={exportProjects}>
           <FileDown size={15} /> 엑셀로 저장
         </GhostButton>
         <PrimaryButton onClick={() => setShowForm(true)}>
-          <Plus size={16} /> 새 프로젝트 추가
+          <Plus size={16} /> 새 프로젝트 {isMember ? "요청" : "추가"}
         </PrimaryButton>
       </div>
 
@@ -1612,6 +1712,11 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ fontWeight: 800, fontSize: 15, color: "#14213D" }}>{p.name}</span>
+                      {hasPending(p.id) && (
+                        <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>
+                          승인대기
+                        </span>
+                      )}
                       {applied ? (
                         <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>
                           반영완료{p.appliedAt ? ` · ${p.appliedAt.slice(0, 10)}` : ""}
@@ -1641,8 +1746,8 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                   <div className="no-print" style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                     <IconBtn title="엑셀로 저장" color="#6B7280" onClick={() => exportSingleProject(p)}><FileDown size={14} /></IconBtn>
                     <IconBtn title="인쇄" color="#6B7280" onClick={() => printElementById(`project-print-${p.id}`)}><Printer size={14} /></IconBtn>
-                    <IconBtn title="수정" color="#6B7280" onClick={() => setEditProject(p)}><Edit2 size={14} /></IconBtn>
-                    <IconBtn title="삭제" color="#6B7280" onClick={() => setDeleteTarget(p)}><Trash2 size={14} /></IconBtn>
+                    <IconBtn title={isMember ? "수정 요청" : "수정"} color="#6B7280" onClick={() => setEditProject(p)}><Edit2 size={14} /></IconBtn>
+                    <IconBtn title={isMember ? "삭제 요청" : "삭제"} color="#6B7280" onClick={() => setDeleteTarget(p)}><Trash2 size={14} /></IconBtn>
                   </div>
                 </div>
 
@@ -1719,10 +1824,10 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                 <div className="no-print" style={{ padding: "0 18px 16px 18px", display: "flex", justifyContent: "flex-end" }}>
                   <PrimaryButton
                     onClick={() => applyProject(p)}
-                    disabled={applied || applying === p.id || p.items.length === 0}
-                    style={{ opacity: applied || applying === p.id || p.items.length === 0 ? 0.5 : 1, cursor: applied ? "default" : "pointer" }}
+                    disabled={applied || applying === p.id || p.items.length === 0 || (isMember && hasPending(p.id))}
+                    style={{ opacity: applied || applying === p.id || p.items.length === 0 || (isMember && hasPending(p.id)) ? 0.5 : 1, cursor: applied ? "default" : "pointer" }}
                   >
-                    {applying === p.id ? "반영 중..." : applied ? "반영완료" : "반영"}
+                    {applying === p.id ? "반영 중..." : applied ? "반영완료" : isMember ? "반영 요청" : "반영"}
                   </PrimaryButton>
                 </div>
               </div>
@@ -1735,7 +1840,9 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
       {editProject && <ProjectFormModal initial={editProject} items={items} onSave={saveProject} onClose={() => setEditProject(null)} />}
       {deleteTarget && (
         <ConfirmDialog
-          text={`'${deleteTarget.name}' 프로젝트를 삭제하시겠습니까? 이 프로젝트로 "반영"되어 등록된 출고 기록도 함께 삭제되어 재고에 되돌아갑니다.`}
+          text={isMember
+            ? `'${deleteTarget.name}' 프로젝트 삭제를 관리자에게 요청하시겠습니까?`
+            : `'${deleteTarget.name}' 프로젝트를 삭제하시겠습니까? 이 프로젝트로 "반영"되어 등록된 출고 기록도 함께 삭제되어 재고에 되돌아갑니다.`}
           onConfirm={() => deleteProject(deleteTarget.id)}
           onClose={() => setDeleteTarget(null)}
         />
@@ -2055,11 +2162,13 @@ function EventFormModal({ initial, defaultDate, onSave, onDelete, onClose }) {
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
 // ---------- Calendar tab ----------
-function CalendarTab({ items, transactions, vendors, projects = [], events, setEvents }) {
+function CalendarTab({ items, transactions, vendors, projects = [], events, setEvents, role, username, pending, setPending }) {
   const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
   const [selectedDate, setSelectedDate] = useState(todayStr());
   const [showEventForm, setShowEventForm] = useState(false);
   const [editEvent, setEditEvent] = useState(null);
+  const [notice, setNotice] = useState("");
+  const isMember = role === "member";
 
   const year = cursor.getFullYear();
   const month = cursor.getMonth();
@@ -2072,6 +2181,9 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
   }
   function projectName(id) {
     return projects.find((p) => p.id === id)?.name || "";
+  }
+  function hasPendingEvent(id) {
+    return pending.some((p) => p.entity === "event" && p.targetId === id);
   }
 
   const dayMap = useMemo(() => {
@@ -2109,8 +2221,25 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
     setSelectedDate(todayStr());
   }
 
+  async function queueChange(action, targetId, payload, summary) {
+    const created = await insertPending({ entity: "event", action, targetId, payload, summary, requestedBy: username });
+    setPending([created, ...pending]);
+    setNotice(
+      action === "create" ? "일정 등록 요청이 접수되었습니다. 관리자 승인 후 반영됩니다."
+      : action === "edit" ? "일정 수정 요청이 접수되었습니다. 관리자 승인 후 반영됩니다."
+      : "일정 삭제 요청이 접수되었습니다. 관리자 승인 후 반영됩니다."
+    );
+  }
+
   async function saveEvent(ev) {
     const exists = events.some((e) => e.id === ev.id);
+    if (isMember) {
+      if (exists) await queueChange("edit", ev.id, ev, `일정 '${ev.title}' 수정 요청`);
+      else await queueChange("create", null, ev, `일정 '${ev.title}' 등록 요청 (${ev.date})`);
+      setShowEventForm(false);
+      setEditEvent(null);
+      return;
+    }
     if (exists) {
       const updated = await updateEvent(ev.id, ev);
       setEvents(events.map((e) => (e.id === ev.id ? updated : e)));
@@ -2123,6 +2252,12 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
   }
 
   async function deleteEvent(id) {
+    if (isMember) {
+      const ev = events.find((e) => e.id === id);
+      await queueChange("delete", id, null, `일정 '${ev?.title || ""}' 삭제 요청`);
+      setEditEvent(null);
+      return;
+    }
     await deleteEventRow(id);
     setEvents(events.filter((e) => e.id !== id));
     setEditEvent(null);
@@ -2154,7 +2289,18 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
   const selectedEvents = events.filter((e) => e.date === selectedDate);
 
   return (
-    <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-start" }}>
+    <div>
+      {notice && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          background: "#EAF1FE", border: "1px solid #C9DCFB", color: "#2554A8",
+          borderRadius: 8, padding: "10px 14px", fontSize: 12.5, fontWeight: 600, marginBottom: 14,
+        }}>
+          <span>{notice}</span>
+          <button onClick={() => setNotice("")} style={{ border: "none", background: "none", cursor: "pointer", color: "#2554A8" }}><X size={14} /></button>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-start" }}>
       <div id="calendar-print-area" style={{ flex: "2 1 480px", background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: 16, minWidth: 320 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -2266,13 +2412,19 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
                     background: "#F7F4FC", border: "1px solid #E9E1F7", fontSize: 12.5, textAlign: "left", cursor: "pointer",
                   }}
                 >
-                  <div style={{ fontWeight: 700, color: "#5B3F94" }}>{e.title}</div>
+                  <div style={{ fontWeight: 700, color: "#5B3F94" }}>
+                    {e.title}
+                    {hasPendingEvent(e.id) && (
+                      <span style={{ marginLeft: 6, padding: "1px 7px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>승인대기</span>
+                    )}
+                  </div>
                   {e.note && <div style={{ color: "#8A93A6" }}>{e.note}</div>}
                 </button>
               ))}
             </div>
           </div>
         )}
+      </div>
       </div>
 
       {showEventForm && (
@@ -2286,7 +2438,11 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
 }
 
 // ---------- Admin tab (회원 승인 / 변경 요청 승인) ----------
-function AdminTab({ users, setUsers, pending, setPending, items, setItems, transactions, setTransactions }) {
+function AdminTab({
+  users, setUsers, pending, setPending,
+  items, setItems, transactions, setTransactions,
+  vendors, setVendors, events, setEvents, projects, setProjects,
+}) {
   const pendingUsers = users.filter((u) => u.status === "pending");
 
   async function approveUser(id) {
@@ -2300,6 +2456,10 @@ function AdminTab({ users, setUsers, pending, setPending, items, setItems, trans
 
   async function approvePending(p) {
     if (p.entity === "item") {
+      if (p.action === "create") {
+        const created = await insertItem(p.payload);
+        setItems([...items, created]);
+      }
       if (p.action === "edit") {
         const updated = await updateItem(p.targetId, p.payload);
         setItems(items.map((i) => (i.id === p.targetId ? updated : i)));
@@ -2310,6 +2470,10 @@ function AdminTab({ users, setUsers, pending, setPending, items, setItems, trans
         setTransactions(transactions.filter((t) => t.itemId !== p.targetId));
       }
     } else if (p.entity === "transaction") {
+      if (p.action === "create") {
+        const created = await insertTransaction(p.payload);
+        setTransactions([created, ...transactions]);
+      }
       if (p.action === "edit") {
         const updated = await updateTransaction(p.targetId, p.payload);
         setTransactions(transactions.map((t) => (t.id === p.targetId ? updated : t)));
@@ -2317,6 +2481,68 @@ function AdminTab({ users, setUsers, pending, setPending, items, setItems, trans
       if (p.action === "delete") {
         await deleteTransactionRow(p.targetId);
         setTransactions(transactions.filter((t) => t.id !== p.targetId));
+      }
+    } else if (p.entity === "vendor") {
+      if (p.action === "create") {
+        const created = await insertVendor(p.payload);
+        setVendors([...vendors, created]);
+      }
+      if (p.action === "edit") {
+        const updated = await updateVendor(p.targetId, p.payload);
+        setVendors(vendors.map((v) => (v.id === p.targetId ? updated : v)));
+      }
+      if (p.action === "delete") {
+        await deleteVendorRow(p.targetId);
+        setVendors(vendors.filter((v) => v.id !== p.targetId));
+      }
+    } else if (p.entity === "event") {
+      if (p.action === "create") {
+        const created = await insertEvent(p.payload);
+        setEvents([...events, created]);
+      }
+      if (p.action === "edit") {
+        const updated = await updateEvent(p.targetId, p.payload);
+        setEvents(events.map((e) => (e.id === p.targetId ? updated : e)));
+      }
+      if (p.action === "delete") {
+        await deleteEventRow(p.targetId);
+        setEvents(events.filter((e) => e.id !== p.targetId));
+      }
+    } else if (p.entity === "project") {
+      if (p.action === "create") {
+        const created = await insertProject(p.payload);
+        setProjects([created, ...projects]);
+      }
+      if (p.action === "edit") {
+        const updated = await updateProject(p.targetId, p.payload);
+        setProjects(projects.map((pr) => (pr.id === p.targetId ? updated : pr)));
+      }
+      if (p.action === "delete") {
+        const relatedTx = transactions.filter((t) => t.projectId === p.targetId);
+        for (const t of relatedTx) await deleteTransactionRow(t.id);
+        await deleteProjectRow(p.targetId);
+        const relatedIds = new Set(relatedTx.map((t) => t.id));
+        setTransactions(transactions.filter((t) => !relatedIds.has(t.id)));
+        setProjects(projects.filter((pr) => pr.id !== p.targetId));
+      }
+      if (p.action === "apply") {
+        const project = projects.find((pr) => pr.id === p.targetId);
+        if (project && project.status !== "applied") {
+          const today = todayStr();
+          const newTxs = [];
+          for (const row of project.items) {
+            if (!row.itemId || !row.qty || row.qty <= 0) continue;
+            const created = await insertTransaction({
+              itemId: row.itemId, type: "out", outType: "프로젝트",
+              qty: row.qty, date: today, vendorId: null, projectId: project.id,
+              note: `${project.name} 프로젝트 반영`,
+            });
+            newTxs.push(created);
+          }
+          setTransactions([...newTxs, ...transactions]);
+          const updated = await updateProject(project.id, { ...project, status: "applied" });
+          setProjects(projects.map((pr) => (pr.id === project.id ? updated : pr)));
+        }
       }
     }
     await deletePendingRow(p.id);
@@ -2560,17 +2786,24 @@ export default function App() {
               pending={pending} setPending={setPending}
             />
           ) : tab === "vendors" ? (
-            <VendorsTab vendors={vendors} setVendors={setVendors} />
+            <VendorsTab
+              vendors={vendors} setVendors={setVendors}
+              role={role} username={authUser.username}
+              pending={pending} setPending={setPending}
+            />
           ) : tab === "calendar" ? (
             <CalendarTab
               items={items} transactions={transactions} vendors={vendors} projects={projects}
               events={events} setEvents={setEvents}
+              role={role} username={authUser.username}
+              pending={pending} setPending={setPending}
             />
           ) : tab === "projects" ? (
             <ProjectsTab
               projects={projects} setProjects={setProjects}
               items={items} transactions={transactions} setTransactions={setTransactions}
-              username={authUser.username}
+              role={role} username={authUser.username}
+              pending={pending} setPending={setPending}
             />
           ) : (
             <AdminTab
@@ -2578,6 +2811,9 @@ export default function App() {
               pending={pending} setPending={setPending}
               items={items} setItems={setItems}
               transactions={transactions} setTransactions={setTransactions}
+              vendors={vendors} setVendors={setVendors}
+              events={events} setEvents={setEvents}
+              projects={projects} setProjects={setProjects}
             />
           )}
         </div>
