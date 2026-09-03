@@ -825,6 +825,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
   const [expandedItem, setExpandedItem] = useState(null);
   const [notice, setNotice] = useState("");
   const [incomingChoice, setIncomingChoice] = useState({});
+  const [groupDateInputs, setGroupDateInputs] = useState({});
   const [auditMode, setAuditMode] = useState(false);
   const [auditCounts, setAuditCounts] = useState({});
   const [auditOnlyDiff, setAuditOnlyDiff] = useState(false);
@@ -857,6 +858,32 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
     }
     const updated = await updateIncomingRequest(req.id, { expectedDate: date || null });
     setIncoming(incoming.map((r) => (r.id === req.id ? updated : r)));
+  }
+
+  async function applyGroupDate(list, date) {
+    if (!date || list.length === 0) return;
+    if (isMember) {
+      const newPending = [];
+      for (const req of list) {
+        const created = await insertPending({
+          entity: "incoming", action: "edit", targetId: req.id,
+          payload: { expectedDate: date },
+          summary: `입고예정 '${req.name}' 예상 입고일 일괄 변경 요청 (${date})`,
+          requestedBy: username,
+        });
+        newPending.push(created);
+      }
+      setPending([...newPending, ...pending]);
+      setNotice(`예상 입고일 일괄 변경 요청 ${list.length}건이 접수되었습니다. 관리자 승인 후 반영됩니다.`);
+      return;
+    }
+    const updates = [];
+    for (const req of list) {
+      const updated = await updateIncomingRequest(req.id, { expectedDate: date });
+      updates.push(updated);
+    }
+    setIncoming(incoming.map((r) => updates.find((u) => u.id === r.id) || r));
+    setNotice(`예상 입고일 ${list.length}건이 일괄 반영되었습니다.`);
   }
 
   async function confirmIncoming(req) {
@@ -1412,7 +1439,21 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                       <span style={{ fontWeight: 700, fontSize: 13, color: "#0EA5E9" }}>{group.label}</span>
                       <span style={{ fontSize: 11.5, color: "#A2A9B8" }}>{group.list.length}건</span>
                     </div>
-                    <div style={{ display: "flex", gap: 6 }}>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                      <TextInput
+                        type="date"
+                        value={groupDateInputs[group.key] || ""}
+                        onChange={(e) => setGroupDateInputs((prev) => ({ ...prev, [group.key]: e.target.value }))}
+                        style={{ width: 150 }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => applyGroupDate(group.list, groupDateInputs[group.key])}
+                        disabled={!groupDateInputs[group.key]}
+                        style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#6B7280", opacity: groupDateInputs[group.key] ? 1 : 0.5 }}
+                      >
+                        날짜 일괄 적용
+                      </button>
                       <button
                         type="button"
                         onClick={() => setGroupAll(group.list, undefined)}
