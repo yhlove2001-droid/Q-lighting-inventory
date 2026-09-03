@@ -1564,6 +1564,20 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
     return map;
   }, [projects]);
 
+  // 모든 프로젝트를 통틀어 추가로 필요한(부족한) 전체 수량
+  const totalShortInfo = useMemo(() => {
+    let qty = 0;
+    let itemCount = 0;
+    for (const itemId in demandByItem) {
+      const short = demandByItem[itemId] - (stockByItem[itemId] || 0);
+      if (short > 0) {
+        qty += short;
+        itemCount++;
+      }
+    }
+    return { qty, itemCount };
+  }, [demandByItem, stockByItem]);
+
   function toggleExpand(id) {
     setExpandedIds((prev) => {
       const next = new Set(prev);
@@ -1713,6 +1727,17 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
           <button onClick={() => setNotice("")} style={{ border: "none", background: "none", cursor: "pointer", color: "#2554A8" }}><X size={14} /></button>
         </div>
       )}
+
+      <div style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: "16px 18px", marginBottom: 16 }}>
+        <div style={{ fontSize: 12, color: "#8A93A6", fontWeight: 600, marginBottom: 6 }}>전체 프로젝트 추가 발주 필요 수량</div>
+        <div style={{ fontSize: 24, fontWeight: 900, color: totalShortInfo.qty > 0 ? "#E63946" : "#14213D", fontFamily: "ui-monospace, monospace" }}>
+          {totalShortInfo.qty}대
+          {totalShortInfo.itemCount > 0 && (
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#8A93A6", marginLeft: 8 }}>({totalShortInfo.itemCount}개 품목)</span>
+          )}
+        </div>
+      </div>
+
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
         <GhostButton onClick={exportProjects}>
           <FileDown size={15} /> 엑셀로 저장
@@ -1832,7 +1857,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                   <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#EAF1FE", color: "#3B82F6" }}>
                                     재고 미등록
                                   </span>
-                                ) : short > 0 ? (
+                                ) : row.ordered || short > 0 ? (
                                   <div>
                                     <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
                                       <input
@@ -1847,10 +1872,10 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                         background: row.ordered ? "#EAF7F5" : "#FCEBEC",
                                         color: row.ordered ? "#2A9D8F" : "#E63946",
                                       }}>
-                                        {row.ordered ? `발주완료 (부족 ${short})` : `추가 발주 필요 (부족 ${short})`}
+                                        {row.ordered ? `발주완료 (${row.qty}${info.unit ? ` ${info.unit}` : ""})` : `추가 발주 필요 (부족 ${short})`}
                                       </span>
                                     </label>
-                                    {sharedWithOthers && (
+                                    {!row.ordered && sharedWithOthers && (
                                       <div style={{ fontSize: 10.5, color: "#A2A9B8", marginTop: 2 }}>다른 프로젝트 수요 포함 (전체 필요 {totalDemand})</div>
                                     )}
                                   </div>
@@ -1859,9 +1884,6 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                     <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>
                                       충분
                                     </span>
-                                    {sharedWithOthers && (
-                                      <div style={{ fontSize: 10.5, color: "#A2A9B8", marginTop: 2 }}>다른 프로젝트 수요 포함 (전체 필요 {totalDemand})</div>
-                                    )}
                                   </div>
                                 )}
                               </td>
