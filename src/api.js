@@ -172,7 +172,7 @@ export async function insertProject(p) {
 }
 export async function updateProject(id, p) {
   const patch = { name: p.name, note: p.note, items: p.items, status: p.status, due_date: p.dueDate || null };
-  if (p.status === "applied") patch.applied_at = new Date().toISOString();
+  if (p.appliedAt !== undefined) patch.applied_at = p.appliedAt;
   const { data, error } = await supabase.from("projects").update(patch).eq("id", id).select().single();
   if (error) throw error;
   return rowToProject(data);
@@ -212,6 +212,10 @@ export async function updateIncomingRequest(id, patch) {
   const { data, error } = await supabase.from("incoming_requests").update(dbPatch).eq("id", id).select().single();
   if (error) throw error;
   return rowToIncoming(data);
+}
+export async function deleteIncomingRequestRow(id) {
+  const { error } = await supabase.from("incoming_requests").delete().eq("id", id);
+  if (error) throw error;
 }
 
 // ---------- pending_changes (변경 승인 대기) ----------

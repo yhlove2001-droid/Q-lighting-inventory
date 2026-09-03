@@ -16,7 +16,7 @@ import {
   fetchTransactions, insertTransaction, updateTransaction, deleteTransactionRow,
   fetchEvents, insertEvent, updateEvent, deleteEventRow,
   fetchProjects, insertProject, updateProject, deleteProjectRow,
-  fetchIncomingRequests, insertIncomingRequest, updateIncomingRequest,
+  fetchIncomingRequests, insertIncomingRequest, updateIncomingRequest, deleteIncomingRequestRow,
   fetchPending, insertPending, deletePendingRow,
 } from "./api";
 
@@ -802,13 +802,13 @@ function StockAdjustModal({ item, currentStock, onSave, onClose }) {
   );
 }
 
-function ConfirmDialog({ text, onConfirm, onClose }) {
+function ConfirmDialog({ text, onConfirm, onClose, confirmLabel = "삭제", cancelLabel = "취소", confirmColor = "#E63946" }) {
   return (
     <Modal title="확인" onClose={onClose} width={340}>
       <p style={{ fontSize: 14, color: "#374151", marginTop: 0 }}>{text}</p>
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
-        <GhostButton onClick={onClose}>취소</GhostButton>
-        <PrimaryButton onClick={onConfirm} style={{ background: "#E63946" }}>삭제</PrimaryButton>
+        <GhostButton onClick={onClose}>{cancelLabel}</GhostButton>
+        <PrimaryButton onClick={onConfirm} style={{ background: confirmColor }}>{confirmLabel}</PrimaryButton>
       </div>
     </Modal>
   );
@@ -885,6 +885,42 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
       if (!b.location) return -1;
       return a.location.localeCompare(b.location, undefined, { numeric: true, sensitivity: "base" });
     });
+
+  // 위치(A동, B동, ...)별로 묶어서 접었다 펼 수 있게
+  const locationGroups = useMemo(() => {
+    const map = {};
+    for (const it of filtered) {
+      const key = it.location ? it.location.split("-")[0].toUpperCase() : "위치 미지정";
+      if (!map[key]) map[key] = [];
+      map[key].push(it);
+    }
+    const order = "ABCDEFGHI".split("");
+    const keys = Object.keys(map).sort((a, b) => {
+      const ai = order.indexOf(a);
+      const bi = order.indexOf(b);
+      if (ai === -1 && bi === -1) return a.localeCompare(b);
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+    return keys.map((k) => ({ key: k, list: map[k] }));
+  }, [filtered]);
+
+  const [expandedGroups, setExpandedGroups] = useState(new Set());
+  function toggleGroup(key) {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+  function expandAllGroups() {
+    setExpandedGroups(new Set(locationGroups.map((g) => g.key)));
+  }
+  function collapseAllGroups() {
+    setExpandedGroups(new Set());
+  }
 
   async function queueChange(entity, action, targetId, payload, summary) {
     const created = await insertPending({ entity, action, targetId, payload, summary, requestedBy: username });
@@ -1015,6 +1051,12 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
             style={{ paddingLeft: 32, width: "100%", boxSizing: "border-box" }}
           />
         </div>
+        <GhostButton onClick={expandAllGroups} style={{ padding: "9px 12px", fontSize: 12.5 }}>
+          전체 펼치기
+        </GhostButton>
+        <GhostButton onClick={collapseAllGroups} style={{ padding: "9px 12px", fontSize: 12.5 }}>
+          전체 접기
+        </GhostButton>
         <PrimaryButton onClick={() => setShowItemForm(true)}>
           <Plus size={16} /> 새 품목 추가
         </PrimaryButton>
@@ -1041,7 +1083,25 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
             {filtered.length === 0 && (
               <tr><td colSpan={7} style={{ padding: 28, textAlign: "center", color: "#A2A9B8" }}>등록된 품목이 없습니다.</td></tr>
             )}
-            {filtered.map((it) => {
+            {locationGroups.map((group) => {
+              const isGroupOpen = !!search.trim() || expandedGroups.has(group.key);
+              return (
+                <React.Fragment key={group.key}>
+                  <tr
+                    onClick={() => toggleGroup(group.key)}
+                    style={{ cursor: "pointer", background: "#F7F8FA", borderTop: "1px solid #EEF0F3" }}
+                  >
+                    <td colSpan={7} style={{ padding: "9px 14px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <ChevronRight size={14} style={{ transform: isGroupOpen ? "rotate(90deg)" : "none", transition: "transform .15s", color: "#8A93A6" }} />
+                        <span style={{ fontWeight: 800, fontSize: 12.5, color: "#14213D" }}>
+                          {group.key === "위치 미지정" ? "위치 미지정" : `${group.key} 구역`}
+                        </span>
+                        <span style={{ fontSize: 11.5, color: "#8A93A6", fontWeight: 600 }}>({group.list.length}개)</span>
+                      </div>
+                    </td>
+                  </tr>
+                  {isGroupOpen && group.list.map((it) => {
               const stock = stockByItem[it.id] || 0;
               const dates = lastDates[it.id] || {};
               const isOpen = expandedItem === it.id;
@@ -1134,6 +1194,9 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                       </td>
                     </tr>
                   )}
+                </React.Fragment>
+              );
+                  })}
                 </React.Fragment>
               );
             })}
@@ -1673,6 +1736,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
   const [showForm, setShowForm] = useState(false);
   const [editProject, setEditProject] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [cancelTarget, setCancelTarget] = useState(null);
   const [applying, setApplying] = useState(null);
   const [notice, setNotice] = useState("");
   const [expandedIds, setExpandedIds] = useState(new Set());
@@ -1737,6 +1801,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
       action === "create" ? "프로젝트 등록 요청이 접수되었습니다. 관리자 승인 후 반영됩니다."
       : action === "edit" ? "프로젝트 수정 요청이 접수되었습니다. 관리자 승인 후 반영됩니다."
       : action === "apply" ? "반영 요청이 접수되었습니다. 관리자 승인 후 재고에 반영됩니다."
+      : action === "unapply" ? "반영취소 요청이 접수되었습니다. 관리자 승인 후 재고가 되돌아갑니다."
       : "삭제 요청이 접수되었습니다. 관리자 승인 후 반영됩니다."
     );
   }
@@ -1810,9 +1875,34 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
     }
     setTransactions([...newTxs, ...transactions]);
     if (newIncoming.length > 0 && setIncoming) setIncoming([...newIncoming, ...incoming]);
-    const updated = await updateProject(project.id, { ...project, status: "applied" });
+    const updated = await updateProject(project.id, { ...project, status: "applied", appliedAt: new Date().toISOString() });
     setProjects(projects.map((p) => (p.id === project.id ? updated : p)));
     setApplying(null);
+  }
+
+  async function cancelApply(project) {
+    if (isMember) {
+      await queueChange("unapply", project.id, null, `프로젝트 '${project.name}' 반영취소 요청`);
+      setCancelTarget(null);
+      return;
+    }
+    // 이 프로젝트로 반영되어 생긴 출고 기록을 되돌림
+    const relatedTx = transactions.filter((t) => t.projectId === project.id && t.type === "out");
+    for (const t of relatedTx) await deleteTransactionRow(t.id);
+    const relatedTxIds = new Set(relatedTx.map((t) => t.id));
+    setTransactions(transactions.filter((t) => !relatedTxIds.has(t.id)));
+
+    // 아직 처리되지 않은(입고 확정 전) 입고예정 건도 함께 정리
+    const relatedIncoming = incoming.filter((r) => r.projectId === project.id && r.status === "pending");
+    for (const r of relatedIncoming) await deleteIncomingRequestRow(r.id);
+    if (relatedIncoming.length > 0 && setIncoming) {
+      const relatedIncomingIds = new Set(relatedIncoming.map((r) => r.id));
+      setIncoming(incoming.filter((r) => !relatedIncomingIds.has(r.id)));
+    }
+
+    const updated = await updateProject(project.id, { ...project, status: "pending", appliedAt: null });
+    setProjects(projects.map((p) => (p.id === project.id ? updated : p)));
+    setCancelTarget(null);
   }
 
   async function toggleOrdered(project, rowIdx) {
@@ -2072,14 +2162,24 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                 )}
 
                 {expanded && (
-                <div className="no-print" style={{ padding: "0 18px 16px 18px", display: "flex", justifyContent: "flex-end" }}>
-                  <PrimaryButton
-                    onClick={() => applyProject(p)}
-                    disabled={applied || applying === p.id || p.items.length === 0 || (isMember && hasPending(p.id))}
-                    style={{ opacity: applied || applying === p.id || p.items.length === 0 || (isMember && hasPending(p.id)) ? 0.5 : 1, cursor: applied ? "default" : "pointer" }}
-                  >
-                    {applying === p.id ? "반영 중..." : applied ? "반영완료" : isMember ? "반영 요청" : "반영"}
-                  </PrimaryButton>
+                <div className="no-print" style={{ padding: "0 18px 16px 18px", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                  {applied ? (
+                    <GhostButton
+                      onClick={() => setCancelTarget(p)}
+                      disabled={isMember && hasPending(p.id)}
+                      style={{ opacity: isMember && hasPending(p.id) ? 0.5 : 1, color: "#E63946", borderColor: "#F3D2D5" }}
+                    >
+                      {isMember ? "반영취소 요청" : "반영완료 취소"}
+                    </GhostButton>
+                  ) : (
+                    <PrimaryButton
+                      onClick={() => applyProject(p)}
+                      disabled={applying === p.id || p.items.length === 0 || (isMember && hasPending(p.id))}
+                      style={{ opacity: applying === p.id || p.items.length === 0 || (isMember && hasPending(p.id)) ? 0.5 : 1, cursor: "pointer" }}
+                    >
+                      {applying === p.id ? "반영 중..." : isMember ? "반영 요청" : "반영"}
+                    </PrimaryButton>
+                  )}
                 </div>
                 )}
               </div>
@@ -2097,6 +2197,18 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
             : `'${deleteTarget.name}' 프로젝트를 삭제하시겠습니까? 이 프로젝트로 "반영"되어 등록된 출고 기록도 함께 삭제되어 재고에 되돌아갑니다.`}
           onConfirm={() => deleteProject(deleteTarget.id)}
           onClose={() => setDeleteTarget(null)}
+        />
+      )}
+      {cancelTarget && (
+        <ConfirmDialog
+          text={isMember
+            ? `'${cancelTarget.name}' 프로젝트의 반영완료 취소를 관리자에게 요청하시겠습니까?`
+            : `'${cancelTarget.name}' 프로젝트의 반영완료를 취소하시겠습니까? 이 프로젝트로 반영되어 등록된 출고 기록이 삭제되고 재고가 되돌아갑니다.`}
+          confirmLabel="예"
+          cancelLabel="아니오"
+          confirmColor="#FB8500"
+          onConfirm={() => cancelApply(cancelTarget)}
+          onClose={() => setCancelTarget(null)}
         />
       )}
     </div>
@@ -2802,7 +2914,26 @@ function AdminTab({
           }
           setTransactions([...newTxs, ...transactions]);
           if (newIncoming.length > 0) setIncoming([...newIncoming, ...incoming]);
-          const updated = await updateProject(project.id, { ...project, status: "applied" });
+          const updated = await updateProject(project.id, { ...project, status: "applied", appliedAt: new Date().toISOString() });
+          setProjects(projects.map((pr) => (pr.id === project.id ? updated : pr)));
+        }
+      }
+      if (p.action === "unapply") {
+        const project = projects.find((pr) => pr.id === p.targetId);
+        if (project && project.status === "applied") {
+          const relatedTx = transactions.filter((t) => t.projectId === project.id && t.type === "out");
+          for (const t of relatedTx) await deleteTransactionRow(t.id);
+          const relatedTxIds = new Set(relatedTx.map((t) => t.id));
+          setTransactions(transactions.filter((t) => !relatedTxIds.has(t.id)));
+
+          const relatedIncoming = incoming.filter((r) => r.projectId === project.id && r.status === "pending");
+          for (const r of relatedIncoming) await deleteIncomingRequestRow(r.id);
+          if (relatedIncoming.length > 0) {
+            const relatedIncomingIds = new Set(relatedIncoming.map((r) => r.id));
+            setIncoming(incoming.filter((r) => !relatedIncomingIds.has(r.id)));
+          }
+
+          const updated = await updateProject(project.id, { ...project, status: "pending", appliedAt: null });
           setProjects(projects.map((pr) => (pr.id === project.id ? updated : pr)));
         }
       }
