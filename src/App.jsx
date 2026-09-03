@@ -861,15 +861,16 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
 
   async function confirmIncoming(req) {
     const choice = incomingChoice[req.id] || {};
+    const isLinkedToExistingItem = !!req.itemId;
     const whQty = choice.warehouseQty !== undefined && choice.warehouseQty !== "" ? Number(choice.warehouseQty) : req.qty;
     if (Number.isNaN(whQty) || whQty < 0 || whQty > req.qty) return;
-    if (whQty > 0 && !choice.location) return;
+    if (whQty > 0 && !isLinkedToExistingItem && !choice.location) return;
     const projQty = req.qty - whQty;
 
     if (isMember) {
       const created = await insertPending({
         entity: "incoming", action: "receive", targetId: req.id,
-        payload: { warehouseQty: whQty, projectQty: projQty, location: whQty > 0 ? choice.location : null },
+        payload: { warehouseQty: whQty, projectQty: projQty, location: whQty > 0 ? (choice.location || null) : null },
         summary: `입고예정 '${req.name}' 처리 요청 (창고 ${whQty}${req.unit || ""} / 현장 직접 ${projQty}${req.unit || ""})`,
         requestedBy: username,
       });
@@ -878,20 +879,30 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
       return;
     }
 
-    let newItemId = null;
+    let finalItemId = req.itemId || null;
     if (whQty > 0) {
-      const newItem = await insertItem({ name: req.name, location: choice.location, unit: req.unit || "EA", note: "" });
-      setItems([...items, newItem]);
-      const newTx = await insertTransaction({
-        itemId: newItem.id, type: "in", qty: whQty, date: todayStr(), vendorId: null,
-        note: `입고예정 확정 (${choice.location})`,
-      });
-      setTransactions([newTx, ...transactions]);
-      newItemId = newItem.id;
+      if (isLinkedToExistingItem) {
+        // 이미 재고에 등록된 품목의 추가 발주분: 새로 만들지 않고 기존 품목 재고에 더함
+        const newTx = await insertTransaction({
+          itemId: req.itemId, type: "in", qty: whQty, date: todayStr(), vendorId: null,
+          note: "입고예정 확정 (기존 품목에 추가)",
+        });
+        setTransactions([newTx, ...transactions]);
+      } else {
+        const newItem = await insertItem({ name: req.name, location: choice.location, unit: req.unit || "EA", note: "" });
+        setItems([...items, newItem]);
+        const newTx = await insertTransaction({
+          itemId: newItem.id, type: "in", qty: whQty, date: todayStr(), vendorId: null,
+          note: `입고예정 확정 (${choice.location})`,
+        });
+        setTransactions([newTx, ...transactions]);
+        finalItemId = newItem.id;
+      }
     }
     const updatedReq = await updateIncomingRequest(req.id, {
       status: "received", warehouseQty: whQty, projectQty: projQty,
-      location: whQty > 0 ? choice.location : null, itemId: newItemId, receivedAt: new Date().toISOString(),
+      location: whQty > 0 && !isLinkedToExistingItem ? choice.location : req.location,
+      itemId: finalItemId, receivedAt: new Date().toISOString(),
     });
     setIncoming(incoming.map((r) => (r.id === req.id ? updatedReq : r)));
   }
@@ -1387,6 +1398,11 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                             {projectNameFor(req.projectId)}
                           </span>
                         )}
+                        {req.itemId && (
+                          <span style={{ marginLeft: 8, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>
+                            기존 재고 품목 (예비 발주)
+                          </span>
+                        )}
                         {isPendingRequest && (
                           <span style={{ marginLeft: 8, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>
                             승인대기
@@ -1440,7 +1456,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                           {validWhQty ? projQty : "-"}{req.unit || ""}
                         </span>
                       </div>
-                      {validWhQty && whQty > 0 && (
+                      {validWhQty && whQty > 0 && !req.itemId && (
                         <TextInput
                           value={choice.location || ""}
                           onChange={(e) => setChoice(req.id, { location: e.target.value })}
@@ -1449,10 +1465,13 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                           style={{ width: 150 }}
                         />
                       )}
+                      {validWhQty && whQty > 0 && req.itemId && (
+                        <span style={{ fontSize: 11.5, color: "#8A93A6" }}>기존 재고 품목에 바로 추가됩니다</span>
+                      )}
                       <PrimaryButton
                         onClick={() => confirmIncoming(req)}
-                        disabled={!validWhQty || (whQty > 0 && !choice.location) || isPendingRequest}
-                        style={{ opacity: !validWhQty || (whQty > 0 && !choice.location) || isPendingRequest ? 0.5 : 1 }}
+                        disabled={!validWhQty || (whQty > 0 && !req.itemId && !choice.location) || isPendingRequest}
+                        style={{ opacity: !validWhQty || (whQty > 0 && !req.itemId && !choice.location) || isPendingRequest ? 0.5 : 1 }}
                       >
                         {isMember ? "처리 요청" : "확정"}
                       </PrimaryButton>
@@ -2054,6 +2073,20 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
           note: `${project.name} 프로젝트 반영`,
         });
         newTxs.push(created);
+
+        // 부족해서 "발주완료" 체크한 경우, 기존 재고 품목이어도 입고예정에 함께 등록 (예비 수량 포함 가능)
+        if (row.ordered) {
+          const stock = stockByItem[row.itemId] || 0;
+          const fallbackShort = Math.max(row.qty - stock, 0);
+          const orderQty = row.orderQty && row.orderQty > 0 ? row.orderQty : fallbackShort;
+          if (orderQty > 0) {
+            const itemObj = items.find((i) => i.id === row.itemId);
+            const createdIncoming = await insertIncomingRequest({
+              projectId: project.id, name: itemObj?.name || "품목", qty: orderQty, unit: itemObj?.unit || null, itemId: row.itemId,
+            });
+            newIncoming.push(createdIncoming);
+          }
+        }
       } else if (row.ordered && row.customName) {
         // 직접입력한(재고 미등록) 장비 중 체크된 것: 입고예정으로 등록 (발주수량이 필요수량보다 많으면 예비 포함)
         const orderQty = row.orderQty && row.orderQty > 0 ? row.orderQty : row.qty;
@@ -2362,11 +2395,25 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                         background: row.ordered ? "#EAF7F5" : "#FCEBEC",
                                         color: row.ordered ? "#2A9D8F" : "#E63946",
                                       }}>
-                                        {row.ordered ? `발주완료 (${row.qty}${info.unit ? ` ${info.unit}` : ""})` : `추가 발주 필요 (부족 ${short})`}
+                                        {row.ordered ? `발주완료 (${row.orderQty ?? short}${info.unit ? ` ${info.unit}` : ""})` : `추가 발주 필요 (부족 ${short})`}
                                       </span>
                                     </label>
                                     {!row.ordered && sharedWithOthers && (
                                       <div style={{ fontSize: 10.5, color: "#A2A9B8", marginTop: 2 }}>다른 프로젝트 수요 포함 (전체 필요 {totalDemand})</div>
+                                    )}
+                                    {row.ordered && (
+                                      <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                                        <span style={{ fontSize: 10.5, color: "#8A93A6" }}>발주수량</span>
+                                        <TextInput
+                                          type="number" min={1}
+                                          value={row.orderQty ?? short}
+                                          onChange={(e) => setOrderQty(p, idx, e.target.value)}
+                                          style={{ width: 60, padding: "3px 6px", fontSize: 11.5 }}
+                                        />
+                                        {Number(row.orderQty ?? short) > short && (
+                                          <span style={{ fontSize: 10.5, color: "#8A93A6" }}>(예비 +{Number(row.orderQty ?? short) - short})</span>
+                                        )}
+                                      </div>
                                     )}
                                   </div>
                                 ) : (
@@ -3120,6 +3167,7 @@ function AdminTab({
         const project = projects.find((pr) => pr.id === p.targetId);
         if (project && project.status !== "applied") {
           const today = todayStr();
+          const stockByItem = computeStockByItem(transactions);
           const newTxs = [];
           const newIncoming = [];
           for (const row of project.items) {
@@ -3131,6 +3179,19 @@ function AdminTab({
                 note: `${project.name} 프로젝트 반영`,
               });
               newTxs.push(created);
+
+              if (row.ordered) {
+                const stock = stockByItem[row.itemId] || 0;
+                const fallbackShort = Math.max(row.qty - stock, 0);
+                const orderQty = row.orderQty && row.orderQty > 0 ? row.orderQty : fallbackShort;
+                if (orderQty > 0) {
+                  const itemObj = items.find((i) => i.id === row.itemId);
+                  const createdIncoming = await insertIncomingRequest({
+                    projectId: project.id, name: itemObj?.name || "품목", qty: orderQty, unit: itemObj?.unit || null, itemId: row.itemId,
+                  });
+                  newIncoming.push(createdIncoming);
+                }
+              }
             } else if (row.ordered && row.customName) {
               const orderQty = row.orderQty && row.orderQty > 0 ? row.orderQty : row.qty;
               const createdIncoming = await insertIncomingRequest({
@@ -3171,20 +3232,30 @@ function AdminTab({
           const { warehouseQty, projectQty, location } = p.payload || {};
           const whQty = warehouseQty != null ? Number(warehouseQty) : req.qty;
           const projQty = projectQty != null ? Number(projectQty) : req.qty - whQty;
-          let newItemId = null;
+          const isLinkedToExistingItem = !!req.itemId;
+          let finalItemId = req.itemId || null;
           if (whQty > 0) {
-            const newItem = await insertItem({ name: req.name, location: location || "", unit: req.unit || "EA", note: "" });
-            setItems([...items, newItem]);
-            const newTx = await insertTransaction({
-              itemId: newItem.id, type: "in", qty: whQty, date: todayStr(), vendorId: null,
-              note: `입고예정 확정 (${location || "위치 미지정"})`,
-            });
-            setTransactions([newTx, ...transactions]);
-            newItemId = newItem.id;
+            if (isLinkedToExistingItem) {
+              const newTx = await insertTransaction({
+                itemId: req.itemId, type: "in", qty: whQty, date: todayStr(), vendorId: null,
+                note: "입고예정 확정 (기존 품목에 추가)",
+              });
+              setTransactions([newTx, ...transactions]);
+            } else {
+              const newItem = await insertItem({ name: req.name, location: location || "", unit: req.unit || "EA", note: "" });
+              setItems([...items, newItem]);
+              const newTx = await insertTransaction({
+                itemId: newItem.id, type: "in", qty: whQty, date: todayStr(), vendorId: null,
+                note: `입고예정 확정 (${location || "위치 미지정"})`,
+              });
+              setTransactions([newTx, ...transactions]);
+              finalItemId = newItem.id;
+            }
           }
           const updatedReq = await updateIncomingRequest(req.id, {
             status: "received", warehouseQty: whQty, projectQty: projQty,
-            location: whQty > 0 ? (location || "") : null, itemId: newItemId, receivedAt: new Date().toISOString(),
+            location: whQty > 0 && !isLinkedToExistingItem ? (location || "") : req.location,
+            itemId: finalItemId, receivedAt: new Date().toISOString(),
           });
           setIncoming(incoming.map((r) => (r.id === req.id ? updatedReq : r)));
         }

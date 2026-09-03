@@ -201,6 +201,7 @@ export async function fetchIncomingRequests() {
 export async function insertIncomingRequest(r) {
   const { data, error } = await supabase.from("incoming_requests").insert({
     project_id: r.projectId || null, name: r.name, qty: r.qty, unit: r.unit || null, status: "pending",
+    item_id: r.itemId || null,
   }).select().single();
   if (error) throw error;
   return rowToIncoming(data);
