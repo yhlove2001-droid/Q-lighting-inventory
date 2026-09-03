@@ -187,6 +187,8 @@ function rowToIncoming(r) {
   return {
     id: r.id, projectId: r.project_id || null, name: r.name, qty: Number(r.qty), unit: r.unit || null,
     status: r.status, destination: r.destination || null, location: r.location || null,
+    warehouseQty: r.warehouse_qty != null ? Number(r.warehouse_qty) : null,
+    projectQty: r.project_qty != null ? Number(r.project_qty) : null,
     itemId: r.item_id || null, receivedAt: r.received_at || null, createdAt: r.created_at,
   };
 }
@@ -207,6 +209,8 @@ export async function updateIncomingRequest(id, patch) {
   if ("status" in patch) dbPatch.status = patch.status;
   if ("destination" in patch) dbPatch.destination = patch.destination;
   if ("location" in patch) dbPatch.location = patch.location;
+  if ("warehouseQty" in patch) dbPatch.warehouse_qty = patch.warehouseQty;
+  if ("projectQty" in patch) dbPatch.project_qty = patch.projectQty;
   if ("itemId" in patch) dbPatch.item_id = patch.itemId;
   if ("receivedAt" in patch) dbPatch.received_at = patch.receivedAt;
   const { data, error } = await supabase.from("incoming_requests").update(dbPatch).eq("id", id).select().single();

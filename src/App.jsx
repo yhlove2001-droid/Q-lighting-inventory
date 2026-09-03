@@ -841,14 +841,16 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
 
   async function confirmIncoming(req) {
     const choice = incomingChoice[req.id] || {};
-    if (!choice.destination) return;
-    if (choice.destination === "warehouse" && !choice.location) return;
+    const whQty = choice.warehouseQty !== undefined && choice.warehouseQty !== "" ? Number(choice.warehouseQty) : req.qty;
+    if (Number.isNaN(whQty) || whQty < 0 || whQty > req.qty) return;
+    if (whQty > 0 && !choice.location) return;
+    const projQty = req.qty - whQty;
 
     if (isMember) {
       const created = await insertPending({
         entity: "incoming", action: "receive", targetId: req.id,
-        payload: { destination: choice.destination, location: choice.location || null },
-        summary: `입고예정 '${req.name}' ${choice.destination === "warehouse" ? "창고 입고" : "프로젝트 직접 전달"} 처리 요청`,
+        payload: { warehouseQty: whQty, projectQty: projQty, location: whQty > 0 ? choice.location : null },
+        summary: `입고예정 '${req.name}' 처리 요청 (창고 ${whQty}${req.unit || ""} / 현장 직접 ${projQty}${req.unit || ""})`,
         requestedBy: username,
       });
       setPending([created, ...pending]);
@@ -856,24 +858,22 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
       return;
     }
 
-    if (choice.destination === "warehouse") {
+    let newItemId = null;
+    if (whQty > 0) {
       const newItem = await insertItem({ name: req.name, location: choice.location, unit: req.unit || "EA", note: "" });
       setItems([...items, newItem]);
       const newTx = await insertTransaction({
-        itemId: newItem.id, type: "in", qty: req.qty, date: todayStr(), vendorId: null,
+        itemId: newItem.id, type: "in", qty: whQty, date: todayStr(), vendorId: null,
         note: `입고예정 확정 (${choice.location})`,
       });
       setTransactions([newTx, ...transactions]);
-      const updatedReq = await updateIncomingRequest(req.id, {
-        status: "received", destination: "warehouse", location: choice.location, itemId: newItem.id, receivedAt: new Date().toISOString(),
-      });
-      setIncoming(incoming.map((r) => (r.id === req.id ? updatedReq : r)));
-    } else {
-      const updatedReq = await updateIncomingRequest(req.id, {
-        status: "received", destination: "project", receivedAt: new Date().toISOString(),
-      });
-      setIncoming(incoming.map((r) => (r.id === req.id ? updatedReq : r)));
+      newItemId = newItem.id;
     }
+    const updatedReq = await updateIncomingRequest(req.id, {
+      status: "received", warehouseQty: whQty, projectQty: projQty,
+      location: whQty > 0 ? choice.location : null, itemId: newItemId, receivedAt: new Date().toISOString(),
+    });
+    setIncoming(incoming.map((r) => (r.id === req.id ? updatedReq : r)));
   }
 
   const filtered = items
@@ -1220,12 +1220,15 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
               {pendingIncoming.map((req) => {
                 const choice = incomingChoice[req.id] || {};
                 const isPendingRequest = pending.some((p) => p.entity === "incoming" && p.targetId === req.id);
+                const whQty = choice.warehouseQty !== undefined && choice.warehouseQty !== "" ? Number(choice.warehouseQty) : req.qty;
+                const validWhQty = !Number.isNaN(whQty) && whQty >= 0 && whQty <= req.qty;
+                const projQty = validWhQty ? req.qty - whQty : null;
                 return (
                   <div key={req.id} style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: "14px 16px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
                       <div>
                         <span style={{ fontWeight: 700, fontSize: 14, color: "#14213D" }}>{req.name}</span>
-                        <span style={{ marginLeft: 8, fontFamily: "ui-monospace, monospace", color: "#8A93A6", fontSize: 12.5 }}>수량 {req.qty}{req.unit ? ` ${req.unit}` : ""}</span>
+                        <span style={{ marginLeft: 8, fontFamily: "ui-monospace, monospace", color: "#8A93A6", fontSize: 12.5 }}>총 수량 {req.qty}{req.unit ? ` ${req.unit}` : ""}</span>
                         {req.projectId && projectNameFor(req.projectId) && (
                           <span style={{ marginLeft: 8, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#EAF1FE", color: "#0EA5E9" }}>
                             {projectNameFor(req.projectId)}
@@ -1238,44 +1241,40 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                         )}
                       </div>
                     </div>
+                    <div style={{ fontSize: 11.5, color: "#A2A9B8", marginBottom: 8 }}>
+                      전체 수량 중 일부만 창고로 입고하고 나머지는 현장(프로젝트)으로 바로 보낼 수 있습니다.
+                    </div>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                      <button
-                        type="button"
-                        onClick={() => setChoice(req.id, { destination: "warehouse" })}
-                        style={{
-                          padding: "7px 12px", borderRadius: 7, cursor: "pointer", fontSize: 12.5, fontWeight: 700,
-                          border: choice.destination === "warehouse" ? "2px solid #2A9D8F" : "1px solid #DADFE6",
-                          background: choice.destination === "warehouse" ? "#EAF7F5" : "#fff",
-                          color: "#2A9D8F",
-                        }}
-                      >
-                        창고로 입고
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setChoice(req.id, { destination: "project" })}
-                        style={{
-                          padding: "7px 12px", borderRadius: 7, cursor: "pointer", fontSize: 12.5, fontWeight: 700,
-                          border: choice.destination === "project" ? "2px solid #3B82F6" : "1px solid #DADFE6",
-                          background: choice.destination === "project" ? "#EAF1FE" : "#fff",
-                          color: "#3B82F6",
-                        }}
-                      >
-                        창고 거치지 않고 프로젝트로 직접 전달
-                      </button>
-                      {choice.destination === "warehouse" && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 12.5, color: "#2A9D8F", fontWeight: 700 }}>창고로</span>
+                        <TextInput
+                          type="number" min={0} max={req.qty}
+                          value={choice.warehouseQty !== undefined ? choice.warehouseQty : req.qty}
+                          onChange={(e) => setChoice(req.id, { warehouseQty: e.target.value })}
+                          style={{ width: 70 }}
+                        />
+                        <span style={{ fontSize: 12, color: "#8A93A6" }}>{req.unit || ""}</span>
+                      </div>
+                      <span style={{ fontSize: 12.5, color: "#8A93A6" }}>/</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 12.5, color: "#3B82F6", fontWeight: 700 }}>현장 직접 전달</span>
+                        <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: "#14213D" }}>
+                          {validWhQty ? projQty : "-"}{req.unit || ""}
+                        </span>
+                      </div>
+                      {validWhQty && whQty > 0 && (
                         <TextInput
                           value={choice.location || ""}
                           onChange={(e) => setChoice(req.id, { location: e.target.value })}
                           placeholder="창고 위치 (예: A-1)"
                           list="location-options-incoming"
-                          style={{ width: 160 }}
+                          style={{ width: 150 }}
                         />
                       )}
                       <PrimaryButton
                         onClick={() => confirmIncoming(req)}
-                        disabled={!choice.destination || (choice.destination === "warehouse" && !choice.location) || isPendingRequest}
-                        style={{ opacity: !choice.destination || (choice.destination === "warehouse" && !choice.location) || isPendingRequest ? 0.5 : 1 }}
+                        disabled={!validWhQty || (whQty > 0 && !choice.location) || isPendingRequest}
+                        style={{ opacity: !validWhQty || (whQty > 0 && !choice.location) || isPendingRequest ? 0.5 : 1 }}
                       >
                         {isMember ? "처리 요청" : "확정"}
                       </PrimaryButton>
@@ -1733,6 +1732,7 @@ function ProjectFormModal({ initial, items, onSave, onClose }) {
 
 // ---------- Projects tab ----------
 function ProjectsTab({ projects, setProjects, items, transactions, setTransactions, incoming = [], setIncoming, role, username, pending, setPending }) {
+  const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editProject, setEditProject] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -1741,6 +1741,12 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
   const [notice, setNotice] = useState("");
   const [expandedIds, setExpandedIds] = useState(new Set());
   const isMember = role === "member";
+
+  const filteredProjects = useMemo(() => {
+    return projects
+      .filter((p) => p.name.toLowerCase().includes(search.toLowerCase()))
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)); // 최신순
+  }, [projects, search]);
 
   const stockByItem = useMemo(() => computeStockByItem(transactions), [transactions]);
 
@@ -1984,22 +1990,33 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
         )}
       </div>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
-        <GhostButton onClick={exportProjects}>
-          <FileDown size={15} /> 엑셀로 저장
-        </GhostButton>
-        <PrimaryButton onClick={() => setShowForm(true)}>
-          <Plus size={16} /> 새 프로젝트 {isMember ? "요청" : "추가"}
-        </PrimaryButton>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 12, flexWrap: "wrap" }}>
+        <div style={{ position: "relative", flex: "1 1 240px", maxWidth: 320 }}>
+          <Search size={15} color="#A2A9B8" style={{ position: "absolute", left: 11, top: 11 }} />
+          <TextInput
+            placeholder="프로젝트명 검색"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ paddingLeft: 32, width: "100%", boxSizing: "border-box" }}
+          />
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <GhostButton onClick={exportProjects}>
+            <FileDown size={15} /> 엑셀로 저장
+          </GhostButton>
+          <PrimaryButton onClick={() => setShowForm(true)}>
+            <Plus size={16} /> 새 프로젝트 {isMember ? "요청" : "추가"}
+          </PrimaryButton>
+        </div>
       </div>
 
-      {projects.length === 0 ? (
+      {filteredProjects.length === 0 ? (
         <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", padding: 40, textAlign: "center", color: "#A2A9B8", fontSize: 13.5 }}>
-          등록된 프로젝트가 없습니다.
+          {search ? "검색 결과가 없습니다." : "등록된 프로젝트가 없습니다."}
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {projects.map((p) => {
+          {filteredProjects.map((p) => {
             const applied = p.status === "applied";
             const expanded = expandedIds.has(p.id);
             const shortCount = p.items.filter((row) => {
@@ -2941,25 +2958,25 @@ function AdminTab({
       if (p.action === "receive") {
         const req = incoming.find((r) => r.id === p.targetId);
         if (req && req.status !== "received") {
-          const { destination, location } = p.payload || {};
-          if (destination === "warehouse") {
+          const { warehouseQty, projectQty, location } = p.payload || {};
+          const whQty = warehouseQty != null ? Number(warehouseQty) : req.qty;
+          const projQty = projectQty != null ? Number(projectQty) : req.qty - whQty;
+          let newItemId = null;
+          if (whQty > 0) {
             const newItem = await insertItem({ name: req.name, location: location || "", unit: req.unit || "EA", note: "" });
             setItems([...items, newItem]);
             const newTx = await insertTransaction({
-              itemId: newItem.id, type: "in", qty: req.qty, date: todayStr(), vendorId: null,
+              itemId: newItem.id, type: "in", qty: whQty, date: todayStr(), vendorId: null,
               note: `입고예정 확정 (${location || "위치 미지정"})`,
             });
             setTransactions([newTx, ...transactions]);
-            const updatedReq = await updateIncomingRequest(req.id, {
-              status: "received", destination: "warehouse", location: location || "", itemId: newItem.id, receivedAt: new Date().toISOString(),
-            });
-            setIncoming(incoming.map((r) => (r.id === req.id ? updatedReq : r)));
-          } else {
-            const updatedReq = await updateIncomingRequest(req.id, {
-              status: "received", destination: "project", receivedAt: new Date().toISOString(),
-            });
-            setIncoming(incoming.map((r) => (r.id === req.id ? updatedReq : r)));
+            newItemId = newItem.id;
           }
+          const updatedReq = await updateIncomingRequest(req.id, {
+            status: "received", warehouseQty: whQty, projectQty: projQty,
+            location: whQty > 0 ? (location || "") : null, itemId: newItemId, receivedAt: new Date().toISOString(),
+          });
+          setIncoming(incoming.map((r) => (r.id === req.id ? updatedReq : r)));
         }
       }
     }
