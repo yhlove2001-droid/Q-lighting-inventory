@@ -71,10 +71,36 @@ function printElementById(id) {
 }
 
 // 표 형태 데이터를 엑셀(.xlsx) 파일로 다운로드
-function exportToExcel(filename, rows) {
+// 한글은 영문보다 넓게 표시되므로 대략적인 표시 폭 계산 (열 너비 자동 조정용)
+function displayWidth(str) {
+  let w = 0;
+  for (const ch of String(str ?? "")) {
+    w += ch.charCodeAt(0) > 127 ? 2 : 1;
+  }
+  return w;
+}
+
+function exportToExcel(filename, rows, sheetName = "Sheet1") {
   const ws = XLSX.utils.json_to_sheet(rows);
+
+  if (rows.length > 0) {
+    const headers = Object.keys(rows[0]);
+    // 열 너비: 헤더와 내용 중 더 긴 쪽 기준으로 자동 조정
+    ws["!cols"] = headers.map((h) => {
+      const maxLen = Math.max(
+        displayWidth(h),
+        ...rows.map((r) => displayWidth(r[h]))
+      );
+      return { wch: Math.min(Math.max(maxLen + 2, 8), 40) };
+    });
+  }
+  // 첫 행(헤더) 고정 + 자동 필터로 훑어보기 편하게
+  ws["!views"] = [{ state: "frozen", ySplit: 1 }];
+  if (ws["!ref"]) ws["!autofilter"] = { ref: ws["!ref"] };
+
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+  const safeName = (sheetName || "Sheet1").replace(/[\\/?*[\]:]/g, " ").trim().slice(0, 31) || "Sheet1";
+  XLSX.utils.book_append_sheet(wb, ws, safeName);
   XLSX.writeFile(wb, filename);
 }
 
@@ -1126,20 +1152,18 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
     const rows = filtered.map((it) => {
       const stock = stockByItem[it.id] || 0;
       const dates = lastDates[it.id] || {};
+      const lastIn = dates.lastIn ? `${dates.lastIn} · ${dates.lastInQty}${dates.lastInUnit || it.unit}` : "-";
+      const lastOut = dates.lastOut ? `${dates.lastOut} · ${dates.lastOutQty}${dates.lastOutUnit || it.unit}` : "-";
       return {
         "품목명": it.name,
-        "위치": it.location || "",
+        "위치": it.location || "-",
         "단위": it.unit,
         "현재재고": stock,
-        "최근입고일": dates.lastIn || "",
-        "최근입고수량": dates.lastInQty ?? "",
-        "최근입고단위": dates.lastInUnit || it.unit,
-        "최근출고일": dates.lastOut || "",
-        "최근출고수량": dates.lastOutQty ?? "",
-        "최근출고단위": dates.lastOutUnit || it.unit,
+        "최근입고": lastIn,
+        "최근출고": lastOut,
       };
     });
-    exportToExcel(`재고현황_${todayStr()}.xlsx`, rows);
+    exportToExcel(`재고현황_${todayStr()}.xlsx`, rows, "재고현황");
   }
 
   return (
@@ -2270,11 +2294,11 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
 
   function exportProjects() {
     const rows = projects.flatMap((p) => buildProjectRows(p));
-    exportToExcel(`프로젝트_${todayStr()}.xlsx`, rows);
+    exportToExcel(`프로젝트_${todayStr()}.xlsx`, rows, "프로젝트현황");
   }
 
   function exportSingleProject(p) {
-    exportToExcel(`프로젝트_${p.name}_${todayStr()}.xlsx`, buildProjectRows(p));
+    exportToExcel(`프로젝트_${p.name}_${todayStr()}.xlsx`, buildProjectRows(p), p.name);
   }
 
   return (
@@ -3028,7 +3052,7 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
       });
     }
     rows.sort((a, b) => (a["날짜"] < b["날짜"] ? -1 : 1));
-    exportToExcel(`일정표_${monthPrefix}.xlsx`, rows);
+    exportToExcel(`일정표_${monthPrefix}.xlsx`, rows, `일정표_${monthPrefix}`);
   }
 
   const selectedTxs = transactions.filter((t) => t.date === selectedDate).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
