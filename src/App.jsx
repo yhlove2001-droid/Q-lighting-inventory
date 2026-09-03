@@ -1545,9 +1545,33 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [applying, setApplying] = useState(null);
   const [notice, setNotice] = useState("");
+  const [expandedIds, setExpandedIds] = useState(new Set());
   const isMember = role === "member";
 
   const stockByItem = useMemo(() => computeStockByItem(transactions), [transactions]);
+
+  // 아직 반영되지 않은(대기중) 모든 프로젝트의 품목별 필요 수량 합계.
+  // 이미 "발주완료" 체크된 항목은 해결된 것으로 보고 합계에서 제외합니다.
+  const demandByItem = useMemo(() => {
+    const map = {};
+    for (const p of projects) {
+      if (p.status === "applied") continue;
+      for (const row of p.items) {
+        if (!row.itemId || row.ordered) continue;
+        map[row.itemId] = (map[row.itemId] || 0) + Number(row.qty || 0);
+      }
+    }
+    return map;
+  }, [projects]);
+
+  function toggleExpand(id) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   function itemInfo(row) {
     if (!row.itemId) {
@@ -1706,11 +1730,22 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           {projects.map((p) => {
             const applied = p.status === "applied";
+            const expanded = expandedIds.has(p.id);
+            const shortCount = p.items.filter((row) => {
+              if (!row.itemId || row.ordered) return false;
+              const stock = stockByItem[row.itemId] || 0;
+              const totalDemand = demandByItem[row.itemId] || 0;
+              return totalDemand - stock > 0;
+            }).length;
             return (
               <div key={p.id} id={`project-print-${p.id}`} style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
-                <div style={{ padding: "14px 18px", borderBottom: "1px solid #EEF0F3", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-                  <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ padding: "14px 18px", borderBottom: expanded ? "1px solid #EEF0F3" : "none", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                  <button
+                    onClick={() => toggleExpand(p.id)}
+                    style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", border: "none", background: "none", cursor: "pointer", padding: 0, textAlign: "left", flex: 1, minWidth: 0 }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <ChevronRight size={15} style={{ color: "#A2A9B8", transform: expanded ? "rotate(90deg)" : "none", transition: "transform .15s", flexShrink: 0 }} />
                       <span style={{ fontWeight: 800, fontSize: 15, color: "#14213D" }}>{p.name}</span>
                       {hasPending(p.id) && (
                         <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>
@@ -1740,9 +1775,14 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                           </span>
                         );
                       })()}
+                      {!expanded && (
+                        <span style={{ fontSize: 11.5, color: "#A2A9B8" }}>
+                          장비 {p.items.length}개{shortCount > 0 && <span style={{ color: "#E63946", fontWeight: 700 }}> · 부족 {shortCount}건</span>}
+                        </span>
+                      )}
                     </div>
-                    {p.note && <div style={{ fontSize: 12.5, color: "#8A93A6", marginTop: 4 }}>{p.note}</div>}
-                  </div>
+                    {p.note && expanded && <div style={{ fontSize: 12.5, color: "#8A93A6", marginTop: 4 }}>{p.note}</div>}
+                  </button>
                   <div className="no-print" style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                     <IconBtn title="엑셀로 저장" color="#6B7280" onClick={() => exportSingleProject(p)}><FileDown size={14} /></IconBtn>
                     <IconBtn title="인쇄" color="#6B7280" onClick={() => printElementById(`project-print-${p.id}`)}><Printer size={14} /></IconBtn>
@@ -1751,6 +1791,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                   </div>
                 </div>
 
+                {expanded && (
                 <div style={{ padding: "12px 18px" }}>
                   {p.items.length === 0 ? (
                     <div style={{ fontSize: 12.5, color: "#A2A9B8" }}>등록된 장비가 없습니다.</div>
@@ -1769,7 +1810,9 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                         {p.items.map((row, idx) => {
                           const info = itemInfo(row);
                           const stock = row.itemId ? (stockByItem[row.itemId] || 0) : 0;
-                          const short = row.qty - stock;
+                          const totalDemand = row.itemId ? (demandByItem[row.itemId] || 0) : 0;
+                          const short = totalDemand - stock;
+                          const sharedWithOthers = row.itemId && !row.ordered && totalDemand > row.qty;
                           return (
                             <tr key={idx} style={{ borderTop: "1px solid #F1F2F5" }}>
                               <td style={{ padding: "6px 8px", fontWeight: 600, color: "#14213D" }}>
@@ -1781,7 +1824,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                 )}
                               </td>
                               <td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "ui-monospace, monospace" }}>{row.qty} {info.unit}</td>
-                              <td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "ui-monospace, monospace", color: !info.custom && stock < row.qty ? "#E63946" : "#6B7280" }}>
+                              <td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "ui-monospace, monospace", color: !info.custom && stock < totalDemand ? "#E63946" : "#6B7280" }}>
                                 {info.custom ? "-" : `${stock} ${info.unit}`}
                               </td>
                               <td style={{ padding: "6px 8px" }}>
@@ -1790,26 +1833,36 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                     재고 미등록
                                   </span>
                                 ) : short > 0 ? (
-                                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                                    <input
-                                      type="checkbox"
-                                      checked={!!row.ordered}
-                                      onChange={() => toggleOrdered(p, idx)}
-                                      className="no-print"
-                                      style={{ width: 14, height: 14, cursor: "pointer" }}
-                                    />
-                                    <span style={{
-                                      padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700,
-                                      background: row.ordered ? "#EAF7F5" : "#FCEBEC",
-                                      color: row.ordered ? "#2A9D8F" : "#E63946",
-                                    }}>
-                                      {row.ordered ? `발주완료 (부족 ${short})` : `추가 발주 필요 (부족 ${short})`}
-                                    </span>
-                                  </label>
+                                  <div>
+                                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={!!row.ordered}
+                                        onChange={() => toggleOrdered(p, idx)}
+                                        className="no-print"
+                                        style={{ width: 14, height: 14, cursor: "pointer" }}
+                                      />
+                                      <span style={{
+                                        padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700,
+                                        background: row.ordered ? "#EAF7F5" : "#FCEBEC",
+                                        color: row.ordered ? "#2A9D8F" : "#E63946",
+                                      }}>
+                                        {row.ordered ? `발주완료 (부족 ${short})` : `추가 발주 필요 (부족 ${short})`}
+                                      </span>
+                                    </label>
+                                    {sharedWithOthers && (
+                                      <div style={{ fontSize: 10.5, color: "#A2A9B8", marginTop: 2 }}>다른 프로젝트 수요 포함 (전체 필요 {totalDemand})</div>
+                                    )}
+                                  </div>
                                 ) : (
-                                  <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>
-                                    충분
-                                  </span>
+                                  <div>
+                                    <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>
+                                      충분
+                                    </span>
+                                    {sharedWithOthers && (
+                                      <div style={{ fontSize: 10.5, color: "#A2A9B8", marginTop: 2 }}>다른 프로젝트 수요 포함 (전체 필요 {totalDemand})</div>
+                                    )}
+                                  </div>
                                 )}
                               </td>
                             </tr>
@@ -1820,7 +1873,9 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                     </div>
                   )}
                 </div>
+                )}
 
+                {expanded && (
                 <div className="no-print" style={{ padding: "0 18px 16px 18px", display: "flex", justifyContent: "flex-end" }}>
                   <PrimaryButton
                     onClick={() => applyProject(p)}
@@ -1830,6 +1885,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                     {applying === p.id ? "반영 중..." : applied ? "반영완료" : isMember ? "반영 요청" : "반영"}
                   </PrimaryButton>
                 </div>
+                )}
               </div>
             );
           })}
