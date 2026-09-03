@@ -1564,19 +1564,20 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
     return map;
   }, [projects]);
 
-  // 모든 프로젝트를 통틀어 추가로 필요한(부족한) 전체 수량
-  const totalShortInfo = useMemo(() => {
-    let qty = 0;
-    let itemCount = 0;
+  // 모든 프로젝트를 통틀어 품목별로 추가 발주가 필요한 목록
+  const shortList = useMemo(() => {
+    const list = [];
     for (const itemId in demandByItem) {
-      const short = demandByItem[itemId] - (stockByItem[itemId] || 0);
+      const stock = stockByItem[itemId] || 0;
+      const short = demandByItem[itemId] - stock;
       if (short > 0) {
-        qty += short;
-        itemCount++;
+        const it = items.find((i) => i.id === itemId);
+        list.push({ itemId, name: it?.name || "삭제된 품목", unit: it?.unit || "EA", short });
       }
     }
-    return { qty, itemCount };
-  }, [demandByItem, stockByItem]);
+    return list.sort((a, b) => b.short - a.short);
+  }, [demandByItem, stockByItem, items]);
+  const totalShortQty = shortList.reduce((sum, s) => sum + s.short, 0);
 
   function toggleExpand(id) {
     setExpandedIds((prev) => {
@@ -1729,13 +1730,27 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
       )}
 
       <div style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: "16px 18px", marginBottom: 16 }}>
-        <div style={{ fontSize: 12, color: "#8A93A6", fontWeight: 600, marginBottom: 6 }}>전체 프로젝트 추가 발주 필요 수량</div>
-        <div style={{ fontSize: 24, fontWeight: 900, color: totalShortInfo.qty > 0 ? "#E63946" : "#14213D", fontFamily: "ui-monospace, monospace" }}>
-          {totalShortInfo.qty}대
-          {totalShortInfo.itemCount > 0 && (
-            <span style={{ fontSize: 13, fontWeight: 700, color: "#8A93A6", marginLeft: 8 }}>({totalShortInfo.itemCount}개 품목)</span>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: "#14213D" }}>전체 프로젝트 품목별 추가 발주 필요 수량</div>
+          {shortList.length > 0 && (
+            <div style={{ fontSize: 11.5, color: "#8A93A6" }}>총 {totalShortQty}대 · {shortList.length}개 품목</div>
           )}
         </div>
+        {shortList.length === 0 ? (
+          <div style={{ fontSize: 12.5, color: "#A2A9B8" }}>추가로 발주가 필요한 품목이 없습니다.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {shortList.map((s) => (
+              <div key={s.itemId} style={{
+                display: "flex", justifyContent: "space-between", alignItems: "center",
+                padding: "8px 12px", background: "#FCEBEC", border: "1px solid #F6D3D6", borderRadius: 7, fontSize: 13,
+              }}>
+                <span style={{ fontWeight: 700, color: "#14213D" }}>{s.name}</span>
+                <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 800, color: "#E63946" }}>부족 {s.short}{s.unit ? ` ${s.unit}` : ""}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
