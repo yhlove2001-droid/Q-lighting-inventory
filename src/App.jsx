@@ -1928,6 +1928,8 @@ function ProjectFormModal({ initial, items, onSave, onClose }) {
           customName: r.customName || "",
           qty: r.qty,
           ordered: !!r.ordered,
+          orderQty: r.orderQty,
+          incomingRequestId: r.incomingRequestId,
         }))
       : [{ itemId: "", customName: "", qty: 1, ordered: false }]
   );
@@ -1948,8 +1950,8 @@ function ProjectFormModal({ initial, items, onSave, onClose }) {
       .filter((r) => (r.itemId === "__custom__" ? r.customName.trim() : r.itemId) && Number(r.qty) > 0)
       .map((r) =>
         r.itemId === "__custom__"
-          ? { itemId: null, customName: r.customName.trim(), qty: Number(r.qty), ordered: !!r.ordered }
-          : { itemId: r.itemId, qty: Number(r.qty), ordered: !!r.ordered }
+          ? { itemId: null, customName: r.customName.trim(), qty: Number(r.qty), ordered: !!r.ordered, orderQty: r.orderQty, incomingRequestId: r.incomingRequestId }
+          : { itemId: r.itemId, qty: Number(r.qty), ordered: !!r.ordered, orderQty: r.orderQty, incomingRequestId: r.incomingRequestId }
       );
     onSave({
       id: initial?.id || uid(),
@@ -2157,10 +2159,18 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
     for (const t of relatedTx) {
       await deleteTransactionRow(t.id);
     }
+    const relatedIncoming = incoming.filter((r) => r.projectId === id && r.status === "pending");
+    for (const r of relatedIncoming) {
+      await deleteIncomingRequestRow(r.id);
+    }
     await deleteProjectRow(id);
     if (relatedTx.length > 0) {
       const relatedIds = new Set(relatedTx.map((t) => t.id));
       setTransactions(transactions.filter((t) => !relatedIds.has(t.id)));
+    }
+    if (relatedIncoming.length > 0) {
+      const relatedIncomingIds = new Set(relatedIncoming.map((r) => r.id));
+      setIncoming(incoming.filter((r) => !relatedIncomingIds.has(r.id)));
     }
     setProjects(projects.filter((p) => p.id !== id));
     setDeleteTarget(null);
@@ -2174,45 +2184,32 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
     setApplying(project.id);
     const today = todayStr();
     const newTxs = [];
-    const newIncoming = [];
+    const shortageNames = [];
     for (const row of project.items) {
-      if (!row.qty || row.qty <= 0) continue;
-      if (row.itemId) {
-        // 재고에 등록된 장비: 실제 출고 처리
+      if (!row.qty || row.qty <= 0 || !row.itemId) continue;
+      // 재고에 등록된 장비: 실제로 있는 만큼만 출고 처리 (마이너스 재고 방지)
+      const availableStock = stockByItem[row.itemId] || 0;
+      const deductQty = Math.min(row.qty, Math.max(availableStock, 0));
+      if (deductQty > 0) {
         const created = await insertTransaction({
           itemId: row.itemId, type: "out", outType: "프로젝트",
-          qty: row.qty, date: today, vendorId: null, projectId: project.id,
+          qty: deductQty, date: today, vendorId: null, projectId: project.id,
           note: `${project.name} 프로젝트 반영`,
         });
         newTxs.push(created);
-
-        // 부족해서 "발주완료" 체크한 경우, 기존 재고 품목이어도 입고예정에 함께 등록 (예비 수량 포함 가능)
-        if (row.ordered) {
-          const stock = stockByItem[row.itemId] || 0;
-          const fallbackShort = Math.max(row.qty - stock, 0);
-          const orderQty = row.orderQty && row.orderQty > 0 ? row.orderQty : fallbackShort;
-          if (orderQty > 0) {
-            const itemObj = items.find((i) => i.id === row.itemId);
-            const createdIncoming = await insertIncomingRequest({
-              projectId: project.id, name: itemObj?.name || "품목", qty: orderQty, unit: itemObj?.unit || null, itemId: row.itemId,
-            });
-            newIncoming.push(createdIncoming);
-          }
-        }
-      } else if (row.ordered && row.customName) {
-        // 직접입력한(재고 미등록) 장비 중 체크된 것: 입고예정으로 등록 (발주수량이 필요수량보다 많으면 예비 포함)
-        const orderQty = row.orderQty && row.orderQty > 0 ? row.orderQty : row.qty;
-        const createdIncoming = await insertIncomingRequest({
-          projectId: project.id, name: row.customName, qty: orderQty, unit: null,
-        });
-        newIncoming.push(createdIncoming);
+      }
+      if (deductQty < row.qty) {
+        const itemObj = items.find((i) => i.id === row.itemId);
+        shortageNames.push(itemObj?.name || "품목");
       }
     }
     setTransactions([...newTxs, ...transactions]);
-    if (newIncoming.length > 0 && setIncoming) setIncoming([...newIncoming, ...incoming]);
     const updated = await updateProject(project.id, { ...project, status: "applied", appliedAt: new Date().toISOString() });
     setProjects(projects.map((p) => (p.id === project.id ? updated : p)));
     setApplying(null);
+    if (shortageNames.length > 0) {
+      setNotice(`재고가 부족해 있는 만큼만 차감되었습니다: ${shortageNames.join(", ")}. 부족분은 "발주완료" 체크로 입고예정에 등록해주세요.`);
+    }
   }
 
   async function cancelApply(project) {
@@ -2221,19 +2218,11 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
       setCancelTarget(null);
       return;
     }
-    // 이 프로젝트로 반영되어 생긴 출고 기록을 되돌림
+    // 이 프로젝트로 반영되어 생긴 출고 기록을 되돌림 (입고예정/발주 상태는 반영과 별개이므로 그대로 둡니다)
     const relatedTx = transactions.filter((t) => t.projectId === project.id && t.type === "out");
     for (const t of relatedTx) await deleteTransactionRow(t.id);
     const relatedTxIds = new Set(relatedTx.map((t) => t.id));
     setTransactions(transactions.filter((t) => !relatedTxIds.has(t.id)));
-
-    // 아직 처리되지 않은(입고 확정 전) 입고예정 건도 함께 정리
-    const relatedIncoming = incoming.filter((r) => r.projectId === project.id && r.status === "pending");
-    for (const r of relatedIncoming) await deleteIncomingRequestRow(r.id);
-    if (relatedIncoming.length > 0 && setIncoming) {
-      const relatedIncomingIds = new Set(relatedIncoming.map((r) => r.id));
-      setIncoming(incoming.filter((r) => !relatedIncomingIds.has(r.id)));
-    }
 
     const updated = await updateProject(project.id, { ...project, status: "pending", appliedAt: null });
     setProjects(projects.map((p) => (p.id === project.id ? updated : p)));
@@ -2241,29 +2230,68 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
   }
 
   async function toggleOrdered(project, rowIdx, defaultOrderQty) {
-    const newItems = project.items.map((r, i) => {
-      if (i !== rowIdx) return r;
-      const nextOrdered = !r.ordered;
-      return {
-        ...r,
-        ordered: nextOrdered,
-        orderQty: nextOrdered && r.orderQty === undefined && defaultOrderQty !== undefined ? defaultOrderQty : r.orderQty,
-      };
-    });
+    const row = project.items[rowIdx];
+    const turnOn = !row.ordered;
+    const orderQty = turnOn ? (row.orderQty && row.orderQty > 0 ? row.orderQty : (defaultOrderQty || row.qty)) : row.orderQty;
+
     if (isMember) {
-      await queueChange("edit", project.id, { ...project, items: newItems }, `프로젝트 '${project.name}' 발주 체크 변경 요청`);
+      const created = await insertPending({
+        entity: "project", action: "toggle_order", targetId: project.id,
+        payload: { rowIdx, orderQty, turnOn },
+        summary: `프로젝트 '${project.name}' 발주 상태 변경 요청 (${turnOn ? "발주완료" : "발주취소"})`,
+        requestedBy: username,
+      });
+      setPending([created, ...pending]);
+      setNotice("발주 상태 변경 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
       return;
     }
+
+    let newIncomingList = incoming;
+    let newItems;
+    if (turnOn) {
+      // 발주완료: 즉시 입고예정 등록
+      let name, unit, itemId;
+      if (row.itemId) {
+        const itemObj = items.find((i) => i.id === row.itemId);
+        name = itemObj?.name || "품목"; unit = itemObj?.unit || null; itemId = row.itemId;
+      } else {
+        name = row.customName; unit = null; itemId = null;
+      }
+      const createdIncoming = await insertIncomingRequest({ projectId: project.id, name, qty: orderQty, unit, itemId });
+      newIncomingList = [createdIncoming, ...incoming];
+      newItems = project.items.map((r, i) => (i === rowIdx ? { ...r, ordered: true, orderQty, incomingRequestId: createdIncoming.id } : r));
+    } else {
+      // 발주취소: 아직 처리 안 된(대기중) 입고예정이면 함께 취소
+      if (row.incomingRequestId) {
+        const existing = incoming.find((r) => r.id === row.incomingRequestId);
+        if (existing && existing.status === "pending") {
+          await deleteIncomingRequestRow(row.incomingRequestId);
+          newIncomingList = incoming.filter((r) => r.id !== row.incomingRequestId);
+        }
+      }
+      newItems = project.items.map((r, i) => (i === rowIdx ? { ...r, ordered: false, incomingRequestId: undefined } : r));
+    }
     const updated = await updateProject(project.id, { ...project, items: newItems });
+    setIncoming(newIncomingList);
     setProjects(projects.map((p) => (p.id === project.id ? updated : p)));
   }
 
   async function setOrderQty(project, rowIdx, val) {
     const num = Number(val);
-    const newItems = project.items.map((r, i) => (i === rowIdx ? { ...r, orderQty: val === "" || Number.isNaN(num) ? undefined : num } : r));
+    const row = project.items[rowIdx];
+    const newQty = val === "" || Number.isNaN(num) ? undefined : num;
+    const newItems = project.items.map((r, i) => (i === rowIdx ? { ...r, orderQty: newQty } : r));
     if (isMember) {
       await queueChange("edit", project.id, { ...project, items: newItems }, `프로젝트 '${project.name}' 발주수량 변경 요청`);
       return;
+    }
+    // 이미 등록된 입고예정이 있으면 수량도 함께 갱신
+    if (row.incomingRequestId && newQty && newQty > 0) {
+      const existing = incoming.find((r) => r.id === row.incomingRequestId);
+      if (existing && existing.status === "pending") {
+        const updatedIncoming = await updateIncomingRequest(row.incomingRequestId, { qty: newQty });
+        setIncoming(incoming.map((r) => (r.id === row.incomingRequestId ? updatedIncoming : r)));
+      }
     }
     const updated = await updateProject(project.id, { ...project, items: newItems });
     setProjects(projects.map((p) => (p.id === project.id ? updated : p)));
@@ -2484,7 +2512,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
                                       </span>
                                     </label>
                                     {!row.ordered && (
-                                      <div style={{ fontSize: 10.5, color: "#A2A9B8", marginTop: 2 }}>체크 후 "반영"하면 재고관리 &gt; 입고예정에 등록됩니다</div>
+                                      <div style={{ fontSize: 10.5, color: "#A2A9B8", marginTop: 2 }}>체크하면 바로 재고관리 &gt; 입고예정에 등록됩니다</div>
                                     )}
                                     {row.ordered && (
                                       <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
@@ -3291,9 +3319,13 @@ function AdminTab({
       if (p.action === "delete") {
         const relatedTx = transactions.filter((t) => t.projectId === p.targetId);
         for (const t of relatedTx) await deleteTransactionRow(t.id);
+        const relatedIncoming = incoming.filter((r) => r.projectId === p.targetId && r.status === "pending");
+        for (const r of relatedIncoming) await deleteIncomingRequestRow(r.id);
         await deleteProjectRow(p.targetId);
         const relatedIds = new Set(relatedTx.map((t) => t.id));
         setTransactions(transactions.filter((t) => !relatedIds.has(t.id)));
+        const relatedIncomingIds = new Set(relatedIncoming.map((r) => r.id));
+        setIncoming(incoming.filter((r) => !relatedIncomingIds.has(r.id)));
         setProjects(projects.filter((pr) => pr.id !== p.targetId));
       }
       if (p.action === "apply") {
@@ -3302,39 +3334,21 @@ function AdminTab({
           const today = todayStr();
           const stockByItem = computeStockByItem(transactions);
           const newTxs = [];
-          const newIncoming = [];
           for (const row of project.items) {
-            if (!row.qty || row.qty <= 0) continue;
-            if (row.itemId) {
+            if (!row.qty || row.qty <= 0 || !row.itemId) continue;
+            // 실제로 있는 만큼만 출고 처리 (마이너스 재고 방지)
+            const availableStock = stockByItem[row.itemId] || 0;
+            const deductQty = Math.min(row.qty, Math.max(availableStock, 0));
+            if (deductQty > 0) {
               const created = await insertTransaction({
                 itemId: row.itemId, type: "out", outType: "프로젝트",
-                qty: row.qty, date: today, vendorId: null, projectId: project.id,
+                qty: deductQty, date: today, vendorId: null, projectId: project.id,
                 note: `${project.name} 프로젝트 반영`,
               });
               newTxs.push(created);
-
-              if (row.ordered) {
-                const stock = stockByItem[row.itemId] || 0;
-                const fallbackShort = Math.max(row.qty - stock, 0);
-                const orderQty = row.orderQty && row.orderQty > 0 ? row.orderQty : fallbackShort;
-                if (orderQty > 0) {
-                  const itemObj = items.find((i) => i.id === row.itemId);
-                  const createdIncoming = await insertIncomingRequest({
-                    projectId: project.id, name: itemObj?.name || "품목", qty: orderQty, unit: itemObj?.unit || null, itemId: row.itemId,
-                  });
-                  newIncoming.push(createdIncoming);
-                }
-              }
-            } else if (row.ordered && row.customName) {
-              const orderQty = row.orderQty && row.orderQty > 0 ? row.orderQty : row.qty;
-              const createdIncoming = await insertIncomingRequest({
-                projectId: project.id, name: row.customName, qty: orderQty, unit: null,
-              });
-              newIncoming.push(createdIncoming);
             }
           }
           setTransactions([...newTxs, ...transactions]);
-          if (newIncoming.length > 0) setIncoming([...newIncoming, ...incoming]);
           const updated = await updateProject(project.id, { ...project, status: "applied", appliedAt: new Date().toISOString() });
           setProjects(projects.map((pr) => (pr.id === project.id ? updated : pr)));
         }
@@ -3342,20 +3356,49 @@ function AdminTab({
       if (p.action === "unapply") {
         const project = projects.find((pr) => pr.id === p.targetId);
         if (project && project.status === "applied") {
+          // 반영으로 생긴 출고 기록만 되돌립니다 (입고예정/발주 상태는 반영과 별개이므로 그대로 둡니다)
           const relatedTx = transactions.filter((t) => t.projectId === project.id && t.type === "out");
           for (const t of relatedTx) await deleteTransactionRow(t.id);
           const relatedTxIds = new Set(relatedTx.map((t) => t.id));
           setTransactions(transactions.filter((t) => !relatedTxIds.has(t.id)));
 
-          const relatedIncoming = incoming.filter((r) => r.projectId === project.id && r.status === "pending");
-          for (const r of relatedIncoming) await deleteIncomingRequestRow(r.id);
-          if (relatedIncoming.length > 0) {
-            const relatedIncomingIds = new Set(relatedIncoming.map((r) => r.id));
-            setIncoming(incoming.filter((r) => !relatedIncomingIds.has(r.id)));
-          }
-
           const updated = await updateProject(project.id, { ...project, status: "pending", appliedAt: null });
           setProjects(projects.map((pr) => (pr.id === project.id ? updated : pr)));
+        }
+      }
+      if (p.action === "toggle_order") {
+        const project = projects.find((pr) => pr.id === p.targetId);
+        if (project) {
+          const { rowIdx, orderQty, turnOn } = p.payload || {};
+          const row = project.items[rowIdx];
+          if (row) {
+            let newIncomingList = incoming;
+            let newItems;
+            if (turnOn) {
+              let name, unit, itemId;
+              if (row.itemId) {
+                const itemObj = items.find((i) => i.id === row.itemId);
+                name = itemObj?.name || "품목"; unit = itemObj?.unit || null; itemId = row.itemId;
+              } else {
+                name = row.customName; unit = null; itemId = null;
+              }
+              const createdIncoming = await insertIncomingRequest({ projectId: project.id, name, qty: orderQty, unit, itemId });
+              newIncomingList = [createdIncoming, ...incoming];
+              newItems = project.items.map((r, i) => (i === rowIdx ? { ...r, ordered: true, orderQty, incomingRequestId: createdIncoming.id } : r));
+            } else {
+              if (row.incomingRequestId) {
+                const existing = incoming.find((r) => r.id === row.incomingRequestId);
+                if (existing && existing.status === "pending") {
+                  await deleteIncomingRequestRow(row.incomingRequestId);
+                  newIncomingList = incoming.filter((r) => r.id !== row.incomingRequestId);
+                }
+              }
+              newItems = project.items.map((r, i) => (i === rowIdx ? { ...r, ordered: false, incomingRequestId: undefined } : r));
+            }
+            const updatedProject = await updateProject(project.id, { ...project, items: newItems });
+            setIncoming(newIncomingList);
+            setProjects(projects.map((pr) => (pr.id === project.id ? updatedProject : pr)));
+          }
         }
       }
     } else if (p.entity === "incoming") {

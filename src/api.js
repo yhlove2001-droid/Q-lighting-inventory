@@ -209,6 +209,7 @@ export async function insertIncomingRequest(r) {
 export async function updateIncomingRequest(id, patch) {
   const dbPatch = {};
   if ("status" in patch) dbPatch.status = patch.status;
+  if ("qty" in patch) dbPatch.qty = patch.qty;
   if ("destination" in patch) dbPatch.destination = patch.destination;
   if ("location" in patch) dbPatch.location = patch.location;
   if ("warehouseQty" in patch) dbPatch.warehouse_qty = patch.warehouseQty;
