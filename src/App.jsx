@@ -852,6 +852,24 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
   const [notice, setNotice] = useState("");
   const [incomingChoice, setIncomingChoice] = useState({});
   const [groupDateInputs, setGroupDateInputs] = useState({});
+  const [expandedIncomingGroups, setExpandedIncomingGroups] = useState(new Set());
+  const [expandedIncomingItems, setExpandedIncomingItems] = useState(new Set());
+  function toggleIncomingGroup(key) {
+    setExpandedIncomingGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+  function toggleIncomingItem(id) {
+    setExpandedIncomingItems((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
   const [auditMode, setAuditMode] = useState(false);
   const [auditCounts, setAuditCounts] = useState({});
   const [auditOnlyDiff, setAuditOnlyDiff] = useState(false);
@@ -1452,73 +1470,102 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
             <datalist id="location-options-incoming">
               {LOCATION_OPTIONS.map((opt) => <option key={opt} value={opt} />)}
             </datalist>
-            <div style={{ fontWeight: 800, fontSize: 15, color: "#14213D", marginBottom: 10 }}>
-              입고예정 ({pendingIncoming.length}건)
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+              <div style={{ fontWeight: 800, fontSize: 15, color: "#14213D" }}>
+                입고예정 ({pendingIncoming.length}건)
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <GhostButton onClick={() => setExpandedIncomingGroups(new Set(incomingGroups.map((g) => g.key)))} style={{ padding: "6px 10px", fontSize: 12 }}>
+                  전체 펼치기
+                </GhostButton>
+                <GhostButton onClick={() => { setExpandedIncomingGroups(new Set()); setExpandedIncomingItems(new Set()); }} style={{ padding: "6px 10px", fontSize: 12 }}>
+                  전체 접기
+                </GhostButton>
+              </div>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-              {incomingGroups.map((group) => (
-                <div key={group.key}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {incomingGroups.map((group) => {
+                const isGroupOpen = expandedIncomingGroups.has(group.key);
+                return (
+                <div key={group.key} style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, overflow: "hidden" }}>
+                  <div
+                    onClick={() => toggleIncomingGroup(group.key)}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, padding: "12px 14px", cursor: "pointer", background: "#F7F8FA" }}
+                  >
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <ChevronRight size={15} style={{ color: "#A2A9B8", transform: isGroupOpen ? "rotate(90deg)" : "none", transition: "transform .15s", flexShrink: 0 }} />
                       <span style={{ fontWeight: 700, fontSize: 13, color: "#0EA5E9" }}>{group.label}</span>
                       <span style={{ fontSize: 11.5, color: "#A2A9B8" }}>{group.list.length}건</span>
                     </div>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                      <TextInput
-                        type="date"
-                        value={groupDateInputs[group.key] || ""}
-                        onChange={(e) => setGroupDateInputs((prev) => ({ ...prev, [group.key]: e.target.value }))}
-                        style={{ width: 150 }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => applyGroupDate(group.list, groupDateInputs[group.key])}
-                        disabled={!groupDateInputs[group.key]}
-                        style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#6B7280", opacity: groupDateInputs[group.key] ? 1 : 0.5 }}
-                      >
-                        날짜 일괄 적용
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setGroupAll(group.list, undefined)}
-                        style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#2A9D8F" }}
-                      >
-                        이 프로젝트 전체 창고로
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setGroupAll(group.list, 0)}
-                        style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#3B82F6" }}
-                      >
-                        이 프로젝트 전체 현장으로
-                      </button>
-                    </div>
+                    {isGroupOpen && (
+                      <div className="no-print" onClick={(e) => e.stopPropagation()} style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                        <TextInput
+                          type="date"
+                          value={groupDateInputs[group.key] || ""}
+                          onChange={(e) => setGroupDateInputs((prev) => ({ ...prev, [group.key]: e.target.value }))}
+                          style={{ width: 150 }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => applyGroupDate(group.list, groupDateInputs[group.key])}
+                          disabled={!groupDateInputs[group.key]}
+                          style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#6B7280", opacity: groupDateInputs[group.key] ? 1 : 0.5 }}
+                        >
+                          날짜 일괄 적용
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setGroupAll(group.list, undefined)}
+                          style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#2A9D8F" }}
+                        >
+                          이 프로젝트 전체 창고로
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setGroupAll(group.list, 0)}
+                          style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#3B82F6" }}
+                        >
+                          이 프로젝트 전체 현장으로
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {isGroupOpen && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 14px 14px" }}>
                     {group.list.map((req) => {
+                      const isItemOpen = expandedIncomingItems.has(req.id);
                       const choice = incomingChoice[req.id] || {};
                       const isPendingRequest = pending.some((p) => p.entity === "incoming" && p.targetId === req.id);
                       const whQty = choice.warehouseQty !== undefined && choice.warehouseQty !== "" ? Number(choice.warehouseQty) : req.qty;
                       const validWhQty = !Number.isNaN(whQty) && whQty >= 0 && whQty <= req.qty;
                       const projQty = validWhQty ? req.qty - whQty : null;
                       return (
-                        <div key={req.id} style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: "14px 16px" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-                            <div>
+                        <div key={req.id} style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: isItemOpen ? "14px 16px" : "10px 16px" }}>
+                          <div
+                            onClick={() => toggleIncomingItem(req.id)}
+                            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: isItemOpen ? 10 : 0, cursor: "pointer" }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <ChevronRight size={13} style={{ color: "#C4CBD4", transform: isItemOpen ? "rotate(90deg)" : "none", transition: "transform .15s", flexShrink: 0 }} />
                               <span style={{ fontWeight: 700, fontSize: 14, color: "#14213D" }}>{req.name}</span>
-                              <span style={{ marginLeft: 8, fontFamily: "ui-monospace, monospace", color: "#8A93A6", fontSize: 12.5 }}>총 수량 {req.qty}{req.unit ? ` ${req.unit}` : ""}</span>
+                              <span style={{ marginLeft: 4, fontFamily: "ui-monospace, monospace", color: "#8A93A6", fontSize: 12.5 }}>총 수량 {req.qty}{req.unit ? ` ${req.unit}` : ""}</span>
                               {req.itemId && (
-                                <span style={{ marginLeft: 8, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>
+                                <span style={{ marginLeft: 4, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>
                                   기존 재고 품목 (예비 발주)
                                 </span>
                               )}
                               {isPendingRequest && (
-                                <span style={{ marginLeft: 8, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>
+                                <span style={{ marginLeft: 4, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>
                                   승인대기
                                 </span>
                               )}
+                              {req.expectedDate && (
+                                <span style={{ marginLeft: 4, fontSize: 11, color: "#3B82F6" }}>입고예정일 {req.expectedDate}</span>
+                              )}
                             </div>
                           </div>
+                          {isItemOpen && (
+                          <>
                           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
                             <span style={{ fontSize: 12.5, color: "#6B7280", fontWeight: 600 }}>예상 입고일</span>
                             <TextInput
@@ -1585,12 +1632,16 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                               {isMember ? "처리 요청" : "확정"}
                             </PrimaryButton>
                           </div>
+                          </>
+                          )}
                         </div>
                       );
                     })}
                   </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         );
