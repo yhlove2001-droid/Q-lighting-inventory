@@ -21,6 +21,24 @@
           position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 12px;
         }
         body.print-mode-active .no-print { display: none !important; }
+
+        /* 달력 인쇄 시(printing-calendar일 때만) 페이지 꽉 차게: 칸을 크게, 글씨도 크게 */
+        body.printing-calendar .print-target {
+          width: 100vw !important; max-width: none !important;
+        }
+        body.printing-calendar .calendar-grid {
+          height: calc(100vh - 90px) !important;
+          grid-auto-rows: 1fr !important;
+        }
+        body.printing-calendar .calendar-cell {
+          min-height: 0 !important; padding: 6px 8px !important;
+        }
+        body.printing-calendar .calendar-cell > div:first-child span:first-child {
+          font-size: 18px !important;
+        }
+        body.printing-calendar .calendar-cell-events div {
+          font-size: 13px !important; padding: 2px 5px !important; margin-bottom: 2px;
+        }
       }
 
       /* 표는 화면이 좁으면 글자가 눌리는 대신 좌우로 스크롤되게 */
