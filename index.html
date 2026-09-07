@@ -22,36 +22,32 @@
         }
         body.print-mode-active .no-print { display: none !important; }
 
-        /* 달력 인쇄 시(printing-calendar일 때만) 페이지 꽉 차게: 여백 없이 칸이 남는 공간을 채움 */
+        /* 달력 인쇄 시(printing-calendar일 때만) 페이지 꽉 차게: 칸을 물리적 단위(mm)로 넉넉하게 키움
+           (100vh로 억지로 딱 맞추면 아주 살짝 넘쳐서 빈 페이지가 하나 더 생기는 문제가 있어
+            안전하게 고정 크기로 채우는 방식으로 변경) */
         @page { margin: 6mm; }
         body.printing-calendar .print-target {
-          position: fixed !important; inset: 0; left: 0; top: 0;
-          width: 100vw !important; height: 100vh !important; max-width: none !important;
-          display: flex !important; flex-direction: column !important;
+          position: absolute !important; left: 0 !important; top: 0 !important;
+          width: 100% !important; max-width: none !important;
           padding: 4mm !important; margin: 0 !important;
         }
-        body.printing-calendar .print-target > div:first-child {
-          flex-shrink: 0;
-        }
         body.printing-calendar .calendar-grid {
-          flex: 1 1 auto !important;
-          height: auto !important;
-          grid-auto-rows: 1fr !important;
+          grid-auto-rows: auto !important;
         }
         body.printing-calendar .calendar-cell {
-          min-height: 0 !important; padding: 6px 8px !important;
+          min-height: 24mm !important; padding: 4px 6px !important;
         }
         body.printing-calendar .calendar-cell > div:first-child span:first-child {
-          font-size: 18px !important;
+          font-size: 16px !important;
         }
         body.printing-calendar .calendar-cell-events > div {
-          padding: 2px 5px !important; margin-bottom: 2px;
+          padding: 1px 4px !important; margin-bottom: 1px;
         }
         body.printing-calendar .calendar-cell-events > div > div:first-child {
-          font-size: 13px !important;
+          font-size: 11px !important;
         }
         body.printing-calendar .calendar-cell-events > div > div:last-child {
-          font-size: 11px !important;
+          font-size: 9.5px !important;
         }
         /* 하단 범례는 인쇄에서는 공간 낭비라 생략 */
         body.printing-calendar .calendar-legend {
