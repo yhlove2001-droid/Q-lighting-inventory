@@ -46,6 +46,24 @@ function todayStr() {
 function isFutureDate(dateStr) {
   return dateStr > todayStr();
 }
+// 일정이 특정 날짜를 포함하는지 (endDate가 없으면 하루짜리 일정)
+function eventCoversDate(e, ds) {
+  const end = e.endDate || e.date;
+  return ds >= e.date && ds <= end;
+}
+// start~end 사이의 모든 날짜 문자열(YYYY-MM-DD) 목록
+function eachDateInRange(startStr, endStr) {
+  const dates = [];
+  let cur = new Date(startStr + "T00:00:00");
+  const end = new Date(endStr + "T00:00:00");
+  let guard = 0;
+  while (cur <= end && guard < 366) {
+    dates.push(cur.toISOString().slice(0, 10));
+    cur.setDate(cur.getDate() + 1);
+    guard++;
+  }
+  return dates;
+}
 // 오늘부터 dateStr까지 남은 일수 (음수면 지난 날짜)
 function daysUntil(dateStr) {
   const today = new Date(todayStr() + "T00:00:00");
@@ -2722,9 +2740,13 @@ function MonthlyScheduleCard({ items, transactions, events }) {
       else map[t.date].outs.push(`${itemName(t.itemId)} ${t.qty}`);
     }
     for (const e of events) {
-      if (!map[e.date]) map[e.date] = { ins: [], outs: [] };
-      if (!map[e.date].evts) map[e.date].evts = [];
-      map[e.date].evts.push(e.title);
+      if (!e.date) continue;
+      const label = e.assignee ? `${e.assignee}: ${e.site || e.title}` : (e.site || e.title);
+      for (const ds of eachDateInRange(e.date, e.endDate || e.date)) {
+        if (!map[ds]) map[ds] = { ins: [], outs: [] };
+        if (!map[ds].evts) map[ds].evts = [];
+        map[ds].evts.push(label);
+      }
     }
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2962,6 +2984,7 @@ function DashboardTab({ items, transactions, vendors, events }) {
 // ---------- Event (일정) form modal ----------
 function EventFormModal({ initial, defaultDate, onSave, onDelete, onClose }) {
   const [date, setDate] = useState(initial?.date || defaultDate || todayStr());
+  const [endDate, setEndDate] = useState(initial?.endDate || "");
   const [title, setTitle] = useState(initial?.title || "");
   const [assignee, setAssignee] = useState(initial?.assignee || "");
   const [site, setSite] = useState(initial?.site || "");
@@ -2972,6 +2995,7 @@ function EventFormModal({ initial, defaultDate, onSave, onDelete, onClose }) {
     onSave({
       id: initial?.id || uid(),
       date,
+      endDate: endDate && endDate > date ? endDate : null,
       title: title.trim(),
       assignee: assignee.trim(),
       site: site.trim(),
@@ -2989,9 +3013,19 @@ function EventFormModal({ initial, defaultDate, onSave, onDelete, onClose }) {
   return (
     <Modal title={initial ? "일정 수정" : "새 일정 추가"} onClose={onClose}>
       <div onKeyDown={handleKeyDown} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <Field label="날짜" required>
-          <TextInput type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ width: "100%", boxSizing: "border-box" }} />
-        </Field>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 140 }}>
+            <Field label="시작일" required>
+              <TextInput type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ width: "100%", boxSizing: "border-box" }} />
+            </Field>
+          </div>
+          <div style={{ flex: 1, minWidth: 140 }}>
+            <Field label="종료일">
+              <TextInput type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} min={date} style={{ width: "100%", boxSizing: "border-box" }} />
+            </Field>
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: "#A2A9B8", marginTop: -8 }}>하루짜리 일정이면 종료일은 비워두세요. 여러 날 현장에 가 있으면 종료일까지 입력하면 그 기간 내내 달력에 표시됩니다.</div>
         <Field label="일정 내용" required>
           <TextInput value={title} onChange={(e) => setTitle(e.target.value)} placeholder="예: 거래처 미팅" autoFocus />
         </Field>
@@ -3062,8 +3096,11 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
       if (t.type === "in") map[t.date].inCount++; else map[t.date].outCount++;
     }
     for (const e of events) {
-      if (!map[e.date]) map[e.date] = { inCount: 0, outCount: 0 };
-      map[e.date].eventCount = (map[e.date].eventCount || 0) + 1;
+      if (!e.date) continue;
+      for (const ds of eachDateInRange(e.date, e.endDate || e.date)) {
+        if (!map[ds]) map[ds] = { inCount: 0, outCount: 0 };
+        map[ds].eventCount = (map[ds].eventCount || 0) + 1;
+      }
     }
     return map;
   }, [transactions, events]);
@@ -3072,12 +3109,15 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
     const map = {};
     const monthPrefix = `${year}-${String(month + 1).padStart(2, "0")}`;
     for (const e of events) {
-      if (!e.date || !e.date.startsWith(monthPrefix)) continue;
+      if (!e.date) continue;
       const person = (e.assignee || "").trim() || "미지정";
-      if (!map[person]) map[person] = {};
-      const day = Number(e.date.slice(8, 10));
-      if (!map[person][day]) map[person][day] = [];
-      map[person][day].push(e);
+      for (const ds of eachDateInRange(e.date, e.endDate || e.date)) {
+        if (!ds.startsWith(monthPrefix)) continue;
+        const day = Number(ds.slice(8, 10));
+        if (!map[person]) map[person] = {};
+        if (!map[person][day]) map[person][day] = [];
+        map[person][day].push(e);
+      }
     }
     return Object.keys(map).sort().map((person) => ({ person, days: map[person] }));
   }, [events, year, month]);
@@ -3157,9 +3197,10 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
       });
     }
     for (const e of events) {
-      if (!e.date.startsWith(monthPrefix)) continue;
+      const end = e.endDate || e.date;
+      if (end < monthPrefix + "-01" || e.date > monthPrefix + "-31") continue;
       rows.push({
-        "날짜": e.date, "구분": "일정", "품목": e.title, "수량": "", "단위": "", "출고종류": "",
+        "날짜": e.endDate && e.endDate !== e.date ? `${e.date} ~ ${e.endDate}` : e.date, "구분": "일정", "품목": e.title, "수량": "", "단위": "", "출고종류": "",
         "담당자": e.assignee || "", "현장": e.site || "", "거래처": "", "프로젝트": "", "비고": e.note || "",
       });
     }
@@ -3168,7 +3209,7 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
   }
 
   const selectedTxs = transactions.filter((t) => t.date === selectedDate).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-  const selectedEvents = events.filter((e) => e.date === selectedDate);
+  const selectedEvents = events.filter((e) => eventCoversDate(e, selectedDate));
 
   return (
     <div>
@@ -3271,7 +3312,7 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
             if (d === null) return <div key={idx} />;
             const ds = dateStr(d);
             const info = dayMap[ds] || {};
-            const dayEvents = events.filter((e) => e.date === ds);
+            const dayEvents = events.filter((e) => eventCoversDate(e, ds));
             const isSelected = ds === selectedDate;
             const isToday = ds === todayStr();
             return (
@@ -3384,6 +3425,9 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
                     <div style={{ color: "#3B82F6", fontWeight: 600 }}>
                       {e.assignee}{e.assignee && e.site ? " → " : ""}{e.site}
                     </div>
+                  )}
+                  {e.endDate && e.endDate !== e.date && (
+                    <div style={{ color: "#A2A9B8", fontSize: 11 }}>{e.date} ~ {e.endDate}</div>
                   )}
                   {e.note && <div style={{ color: "#8A93A6" }}>{e.note}</div>}
                 </button>

@@ -125,7 +125,7 @@ export async function deleteTransactionRow(id) {
 
 // ---------- events (캘린더 일정) ----------
 function rowToEvent(r) {
-  return { id: r.id, date: r.date, title: r.title, note: r.note || "", assignee: r.assignee || "", site: r.site || "", createdAt: r.created_at };
+  return { id: r.id, date: r.date, endDate: r.end_date || null, title: r.title, note: r.note || "", assignee: r.assignee || "", site: r.site || "", createdAt: r.created_at };
 }
 export async function fetchEvents() {
   const { data, error } = await supabase.from("events").select("*").order("date", { ascending: true });
@@ -134,14 +134,14 @@ export async function fetchEvents() {
 }
 export async function insertEvent(e) {
   const { data, error } = await supabase.from("events").insert({
-    date: e.date, title: e.title, note: e.note, assignee: e.assignee || null, site: e.site || null,
+    date: e.date, end_date: e.endDate || null, title: e.title, note: e.note, assignee: e.assignee || null, site: e.site || null,
   }).select().single();
   if (error) throw error;
   return rowToEvent(data);
 }
 export async function updateEvent(id, e) {
   const { data, error } = await supabase.from("events").update({
-    date: e.date, title: e.title, note: e.note, assignee: e.assignee || null, site: e.site || null,
+    date: e.date, end_date: e.endDate || null, title: e.title, note: e.note, assignee: e.assignee || null, site: e.site || null,
   }).eq("id", id).select().single();
   if (error) throw error;
   return rowToEvent(data);
