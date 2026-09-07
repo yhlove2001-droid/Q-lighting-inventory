@@ -17,6 +17,7 @@ import {
   fetchEvents, insertEvent, updateEvent, deleteEventRow,
   fetchProjects, insertProject, updateProject, deleteProjectRow,
   fetchIncomingRequests, insertIncomingRequest, updateIncomingRequest, deleteIncomingRequestRow,
+  fetchStaff, insertStaff, updateStaff, deleteStaffRow,
   fetchPending, insertPending, deletePendingRow,
 } from "./api";
 
@@ -2741,7 +2742,7 @@ function MonthlyScheduleCard({ items, transactions, events }) {
     }
     for (const e of events) {
       if (!e.date) continue;
-      const label = e.assignee ? `${e.assignee}: ${e.site || e.title}` : (e.site || e.title);
+      const label = e.assignees?.length > 0 ? `${e.assignees.join(", ")}: ${e.site || e.title}` : (e.site || e.title);
       for (const ds of eachDateInRange(e.date, e.endDate || e.date)) {
         if (!map[ds]) map[ds] = { ins: [], outs: [] };
         if (!map[ds].evts) map[ds].evts = [];
@@ -2982,13 +2983,17 @@ function DashboardTab({ items, transactions, vendors, events }) {
 }
 
 // ---------- Event (일정) form modal ----------
-function EventFormModal({ initial, defaultDate, onSave, onDelete, onClose }) {
+function EventFormModal({ initial, defaultDate, staff = [], onSave, onDelete, onClose }) {
   const [date, setDate] = useState(initial?.date || defaultDate || todayStr());
   const [endDate, setEndDate] = useState(initial?.endDate || "");
   const [title, setTitle] = useState(initial?.title || "");
-  const [assignee, setAssignee] = useState(initial?.assignee || "");
+  const [assignees, setAssignees] = useState(initial?.assignees || []);
   const [site, setSite] = useState(initial?.site || "");
   const [note, setNote] = useState(initial?.note || "");
+
+  function toggleAssignee(name) {
+    setAssignees((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
+  }
 
   function submit() {
     if (!title.trim()) return;
@@ -2997,7 +3002,7 @@ function EventFormModal({ initial, defaultDate, onSave, onDelete, onClose }) {
       date,
       endDate: endDate && endDate > date ? endDate : null,
       title: title.trim(),
-      assignee: assignee.trim(),
+      assignees,
       site: site.trim(),
       note: note.trim(),
       createdAt: initial?.createdAt || new Date().toISOString(),
@@ -3029,12 +3034,31 @@ function EventFormModal({ initial, defaultDate, onSave, onDelete, onClose }) {
         <Field label="일정 내용" required>
           <TextInput value={title} onChange={(e) => setTitle(e.target.value)} placeholder="예: 거래처 미팅" autoFocus />
         </Field>
+        <Field label="담당자 (여러 명 선택 가능)">
+          {staff.length === 0 ? (
+            <div style={{ fontSize: 12, color: "#A2A9B8" }}>등록된 직원이 없습니다. 달력 화면의 "직원 명단"에서 먼저 추가해주세요.</div>
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {staff.map((s) => {
+                const checked = assignees.includes(s.name);
+                return (
+                  <label
+                    key={s.id}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 999, cursor: "pointer",
+                      border: checked ? "1.5px solid #5B3F94" : "1px solid #DADFE6",
+                      background: checked ? "#F1EBFB" : "#fff", color: checked ? "#5B3F94" : "#4B5563", fontSize: 12.5, fontWeight: 600,
+                    }}
+                  >
+                    <input type="checkbox" checked={checked} onChange={() => toggleAssignee(s.name)} style={{ display: "none" }} />
+                    {s.name}
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </Field>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <div style={{ flex: 1, minWidth: 140 }}>
-            <Field label="담당자">
-              <TextInput value={assignee} onChange={(e) => setAssignee(e.target.value)} placeholder="예: 김철수" />
-            </Field>
-          </div>
           <div style={{ flex: 1, minWidth: 140 }}>
             <Field label="현장/행선지">
               <TextInput value={site} onChange={(e) => setSite(e.target.value)} placeholder="예: 강남 현장" />
@@ -3063,13 +3087,14 @@ function EventFormModal({ initial, defaultDate, onSave, onDelete, onClose }) {
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
 // ---------- Calendar tab ----------
-function CalendarTab({ items, transactions, vendors, projects = [], events, setEvents, role, username, pending, setPending }) {
+function CalendarTab({ items, transactions, vendors, projects = [], events, setEvents, staff = [], setStaff, role, username, pending, setPending }) {
   const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
   const [selectedDate, setSelectedDate] = useState(todayStr());
   const [showEventForm, setShowEventForm] = useState(false);
   const [editEvent, setEditEvent] = useState(null);
   const [notice, setNotice] = useState("");
   const [viewMode, setViewMode] = useState("calendar"); // "calendar" | "staff"
+  const [newStaffName, setNewStaffName] = useState("");
   const isMember = role === "member";
 
   const year = cursor.getFullYear();
@@ -3086,6 +3111,9 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
   }
   function hasPendingEvent(id) {
     return pending.some((p) => p.entity === "event" && p.targetId === id);
+  }
+  function hasPendingStaff(id) {
+    return pending.some((p) => p.entity === "staff" && p.targetId === id);
   }
 
   const dayMap = useMemo(() => {
@@ -3110,13 +3138,15 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
     const monthPrefix = `${year}-${String(month + 1).padStart(2, "0")}`;
     for (const e of events) {
       if (!e.date) continue;
-      const person = (e.assignee || "").trim() || "미지정";
-      for (const ds of eachDateInRange(e.date, e.endDate || e.date)) {
-        if (!ds.startsWith(monthPrefix)) continue;
-        const day = Number(ds.slice(8, 10));
-        if (!map[person]) map[person] = {};
-        if (!map[person][day]) map[person][day] = [];
-        map[person][day].push(e);
+      const people = e.assignees?.length > 0 ? e.assignees : ["미지정"];
+      for (const person of people) {
+        for (const ds of eachDateInRange(e.date, e.endDate || e.date)) {
+          if (!ds.startsWith(monthPrefix)) continue;
+          const day = Number(ds.slice(8, 10));
+          if (!map[person]) map[person] = {};
+          if (!map[person][day]) map[person][day] = [];
+          map[person][day].push(e);
+        }
       }
     }
     return Object.keys(map).sort().map((person) => ({ person, days: map[person] }));
@@ -3185,6 +3215,36 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
     setEditEvent(null);
   }
 
+  async function addStaff(name) {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (isMember) {
+      const created = await insertPending({
+        entity: "staff", action: "create", targetId: null, payload: { name: trimmed },
+        summary: `직원 '${trimmed}' 등록 요청`, requestedBy: username,
+      });
+      setPending([created, ...pending]);
+      setNotice("직원 등록 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
+      return;
+    }
+    const created = await insertStaff({ name: trimmed });
+    setStaff([...staff, created].sort((a, b) => a.name.localeCompare(b.name)));
+  }
+
+  async function removeStaff(person) {
+    if (isMember) {
+      const created = await insertPending({
+        entity: "staff", action: "delete", targetId: person.id, payload: null,
+        summary: `직원 '${person.name}' 삭제 요청`, requestedBy: username,
+      });
+      setPending([created, ...pending]);
+      setNotice("직원 삭제 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
+      return;
+    }
+    await deleteStaffRow(person.id);
+    setStaff(staff.filter((s) => s.id !== person.id));
+  }
+
   function exportSchedule() {
     const monthPrefix = `${year}-${String(month + 1).padStart(2, "0")}`;
     const rows = [];
@@ -3201,7 +3261,7 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
       if (end < monthPrefix + "-01" || e.date > monthPrefix + "-31") continue;
       rows.push({
         "날짜": e.endDate && e.endDate !== e.date ? `${e.date} ~ ${e.endDate}` : e.date, "구분": "일정", "품목": e.title, "수량": "", "단위": "", "출고종류": "",
-        "담당자": e.assignee || "", "현장": e.site || "", "거래처": "", "프로젝트": "", "비고": e.note || "",
+        "담당자": (e.assignees || []).join(", "), "현장": e.site || "", "거래처": "", "프로젝트": "", "비고": e.note || "",
       });
     }
     rows.sort((a, b) => (a["날짜"] < b["날짜"] ? -1 : 1));
@@ -3344,7 +3404,7 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
                         padding: "1px 3px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                       }}
                     >
-                      {e.assignee ? `${e.assignee}: ${e.site || e.title}` : (e.site || e.title)}
+                      {e.assignees?.length > 0 ? `${e.assignees.join(", ")}: ${e.site || e.title}` : (e.site || e.title)}
                     </div>
                   ))}
                   {dayEvents.length > 3 && (
@@ -3362,6 +3422,53 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
           <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 8, height: 8, borderRadius: 3, background: "#F1EBFB", border: "1px solid #E9E1F7", display: "inline-block" }} /> 담당자: 현장</span>
         </div>
         </>
+        )}
+      </div>
+
+      <div style={{ flex: "1 1 280px", display: "flex", flexDirection: "column", gap: 16, minWidth: 260 }}>
+      <div className="no-print" style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: 16 }}>
+        <div style={{ fontWeight: 800, fontSize: 14, color: "#14213D", marginBottom: 10 }}>직원 명단</div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+          <TextInput
+            value={newStaffName}
+            onChange={(e) => setNewStaffName(e.target.value)}
+            placeholder="예: 김철수"
+            style={{ flex: 1 }}
+          />
+          <PrimaryButton
+            onClick={() => { addStaff(newStaffName); setNewStaffName(""); }}
+            disabled={!newStaffName.trim()}
+            style={{ padding: "8px 12px", fontSize: 12.5, opacity: newStaffName.trim() ? 1 : 0.5 }}
+          >
+            {isMember ? "요청" : "추가"}
+          </PrimaryButton>
+        </div>
+        {staff.length === 0 ? (
+          <div style={{ fontSize: 12, color: "#A2A9B8" }}>등록된 직원이 없습니다.</div>
+        ) : (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {staff.map((s) => (
+              <span
+                key={s.id}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 8px", borderRadius: 999,
+                  background: "#F1EBFB", color: "#5B3F94", fontSize: 12, fontWeight: 700,
+                }}
+              >
+                {s.name}
+                {hasPendingStaff(s.id) && (
+                  <span style={{ fontSize: 9.5, color: "#FB8500" }}>(대기)</span>
+                )}
+                <button
+                  onClick={() => removeStaff(s)}
+                  title={isMember ? "삭제 요청" : "삭제"}
+                  style={{ border: "none", background: "none", cursor: "pointer", color: "#5B3F94", display: "flex", padding: 0 }}
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
         )}
       </div>
 
@@ -3421,9 +3528,9 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
                       <span style={{ marginLeft: 6, padding: "1px 7px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>승인대기</span>
                     )}
                   </div>
-                  {(e.assignee || e.site) && (
+                  {(e.assignees?.length > 0 || e.site) && (
                     <div style={{ color: "#3B82F6", fontWeight: 600 }}>
-                      {e.assignee}{e.assignee && e.site ? " → " : ""}{e.site}
+                      {(e.assignees || []).join(", ")}{e.assignees?.length > 0 && e.site ? " → " : ""}{e.site}
                     </div>
                   )}
                   {e.endDate && e.endDate !== e.date && (
@@ -3437,12 +3544,13 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
         )}
       </div>
       </div>
+      </div>
 
       {showEventForm && (
-        <EventFormModal defaultDate={selectedDate} onSave={saveEvent} onClose={() => setShowEventForm(false)} />
+        <EventFormModal staff={staff} defaultDate={selectedDate} onSave={saveEvent} onClose={() => setShowEventForm(false)} />
       )}
       {editEvent && (
-        <EventFormModal initial={editEvent} onSave={saveEvent} onDelete={deleteEvent} onClose={() => setEditEvent(null)} />
+        <EventFormModal staff={staff} initial={editEvent} onSave={saveEvent} onDelete={deleteEvent} onClose={() => setEditEvent(null)} />
       )}
     </div>
   );
@@ -3453,7 +3561,7 @@ function AdminTab({
   users, setUsers, pending, setPending,
   items, setItems, transactions, setTransactions,
   vendors, setVendors, events, setEvents, projects, setProjects,
-  incoming = [], setIncoming,
+  incoming = [], setIncoming, staff = [], setStaff,
 }) {
   const pendingUsers = users.filter((u) => u.status === "pending");
 
@@ -3653,6 +3761,19 @@ function AdminTab({
         const updatedReq = await updateIncomingRequest(p.targetId, p.payload);
         setIncoming(incoming.map((r) => (r.id === p.targetId ? updatedReq : r)));
       }
+    } else if (p.entity === "staff") {
+      if (p.action === "create") {
+        const created = await insertStaff(p.payload);
+        setStaff([...staff, created].sort((a, b) => a.name.localeCompare(b.name)));
+      }
+      if (p.action === "edit") {
+        const updated = await updateStaff(p.targetId, p.payload);
+        setStaff(staff.map((s) => (s.id === p.targetId ? updated : s)));
+      }
+      if (p.action === "delete") {
+        await deleteStaffRow(p.targetId);
+        setStaff(staff.filter((s) => s.id !== p.targetId));
+      }
     }
     await deletePendingRow(p.id);
     setPending(pending.filter((x) => x.id !== p.id));
@@ -3732,6 +3853,7 @@ export default function App() {
   const [events, setEvents] = useState([]);
   const [projects, setProjects] = useState([]);
   const [incoming, setIncoming] = useState([]);
+  const [staff, setStaff] = useState([]);
   const [users, setUsers] = useState([]);
   const [pending, setPending] = useState([]);
 
@@ -3753,13 +3875,14 @@ export default function App() {
 
   async function loadAllData(role) {
     setLoading(true);
-    const [i, t, v, e, pr, ic, p] = await Promise.all([
+    const [i, t, v, e, pr, ic, st, p] = await Promise.all([
       fetchItems(),
       fetchTransactions(),
       fetchVendors(),
       fetchEvents(),
       fetchProjects(),
       fetchIncomingRequests(),
+      fetchStaff(),
       fetchPending(),
     ]);
     setItems(i);
@@ -3768,6 +3891,7 @@ export default function App() {
     setEvents(e);
     setProjects(pr);
     setIncoming(ic);
+    setStaff(st);
     setPending(p);
     if (role === "admin") {
       const u = await fetchAllProfiles();
@@ -3786,7 +3910,7 @@ export default function App() {
   async function handleLogout() {
     await supabase.auth.signOut();
     setAuthUser(null);
-    setItems([]); setTransactions([]); setVendors([]); setEvents([]); setProjects([]); setUsers([]); setPending([]);
+    setItems([]); setTransactions([]); setVendors([]); setEvents([]); setProjects([]); setIncoming([]); setStaff([]); setUsers([]); setPending([]);
     setTab("dashboard");
   }
 
@@ -3909,6 +4033,7 @@ export default function App() {
             <CalendarTab
               items={items} transactions={transactions} vendors={vendors} projects={projects}
               events={events} setEvents={setEvents}
+              staff={staff} setStaff={setStaff}
               role={role} username={authUser.username}
               pending={pending} setPending={setPending}
             />
@@ -3931,6 +4056,7 @@ export default function App() {
               events={events} setEvents={setEvents}
               projects={projects} setProjects={setProjects}
               incoming={incoming} setIncoming={setIncoming}
+              staff={staff} setStaff={setStaff}
             />
           )}
         </div>

@@ -125,7 +125,10 @@ export async function deleteTransactionRow(id) {
 
 // ---------- events (캘린더 일정) ----------
 function rowToEvent(r) {
-  return { id: r.id, date: r.date, endDate: r.end_date || null, title: r.title, note: r.note || "", assignee: r.assignee || "", site: r.site || "", createdAt: r.created_at };
+  return {
+    id: r.id, date: r.date, endDate: r.end_date || null, title: r.title, note: r.note || "",
+    assignees: r.assignees || (r.assignee ? [r.assignee] : []), site: r.site || "", createdAt: r.created_at,
+  };
 }
 export async function fetchEvents() {
   const { data, error } = await supabase.from("events").select("*").order("date", { ascending: true });
@@ -134,14 +137,14 @@ export async function fetchEvents() {
 }
 export async function insertEvent(e) {
   const { data, error } = await supabase.from("events").insert({
-    date: e.date, end_date: e.endDate || null, title: e.title, note: e.note, assignee: e.assignee || null, site: e.site || null,
+    date: e.date, end_date: e.endDate || null, title: e.title, note: e.note, assignees: e.assignees || [], site: e.site || null,
   }).select().single();
   if (error) throw error;
   return rowToEvent(data);
 }
 export async function updateEvent(id, e) {
   const { data, error } = await supabase.from("events").update({
-    date: e.date, end_date: e.endDate || null, title: e.title, note: e.note, assignee: e.assignee || null, site: e.site || null,
+    date: e.date, end_date: e.endDate || null, title: e.title, note: e.note, assignees: e.assignees || [], site: e.site || null,
   }).eq("id", id).select().single();
   if (error) throw error;
   return rowToEvent(data);
@@ -223,6 +226,30 @@ export async function updateIncomingRequest(id, patch) {
 }
 export async function deleteIncomingRequestRow(id) {
   const { error } = await supabase.from("incoming_requests").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// ---------- staff (직원 명단) ----------
+function rowToStaff(r) {
+  return { id: r.id, name: r.name, createdAt: r.created_at };
+}
+export async function fetchStaff() {
+  const { data, error } = await supabase.from("staff").select("*").order("name", { ascending: true });
+  if (error) { console.error(error); return []; }
+  return data.map(rowToStaff);
+}
+export async function insertStaff(s) {
+  const { data, error } = await supabase.from("staff").insert({ name: s.name }).select().single();
+  if (error) throw error;
+  return rowToStaff(data);
+}
+export async function updateStaff(id, s) {
+  const { data, error } = await supabase.from("staff").update({ name: s.name }).eq("id", id).select().single();
+  if (error) throw error;
+  return rowToStaff(data);
+}
+export async function deleteStaffRow(id) {
+  const { error } = await supabase.from("staff").delete().eq("id", id);
   if (error) throw error;
 }
 
