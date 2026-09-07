@@ -54,14 +54,16 @@ function daysUntil(dateStr) {
 }
 
 // 특정 DOM 요소만 골라서 인쇄 (index.html의 print-mode-active CSS와 함께 동작)
-function printElementById(id) {
+function printElementById(id, extraBodyClass) {
   const el = document.getElementById(id);
   if (!el) return;
   el.classList.add("print-target");
   document.body.classList.add("print-mode-active");
+  if (extraBodyClass) document.body.classList.add(extraBodyClass);
   const cleanup = () => {
     el.classList.remove("print-target");
     document.body.classList.remove("print-mode-active");
+    if (extraBodyClass) document.body.classList.remove(extraBodyClass);
     window.removeEventListener("afterprint", cleanup);
   };
   window.addEventListener("afterprint", cleanup);
@@ -2961,6 +2963,8 @@ function DashboardTab({ items, transactions, vendors, events }) {
 function EventFormModal({ initial, defaultDate, onSave, onDelete, onClose }) {
   const [date, setDate] = useState(initial?.date || defaultDate || todayStr());
   const [title, setTitle] = useState(initial?.title || "");
+  const [assignee, setAssignee] = useState(initial?.assignee || "");
+  const [site, setSite] = useState(initial?.site || "");
   const [note, setNote] = useState(initial?.note || "");
 
   function submit() {
@@ -2969,6 +2973,8 @@ function EventFormModal({ initial, defaultDate, onSave, onDelete, onClose }) {
       id: initial?.id || uid(),
       date,
       title: title.trim(),
+      assignee: assignee.trim(),
+      site: site.trim(),
       note: note.trim(),
       createdAt: initial?.createdAt || new Date().toISOString(),
     });
@@ -2989,6 +2995,18 @@ function EventFormModal({ initial, defaultDate, onSave, onDelete, onClose }) {
         <Field label="일정 내용" required>
           <TextInput value={title} onChange={(e) => setTitle(e.target.value)} placeholder="예: 거래처 미팅" autoFocus />
         </Field>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 140 }}>
+            <Field label="담당자">
+              <TextInput value={assignee} onChange={(e) => setAssignee(e.target.value)} placeholder="예: 김철수" />
+            </Field>
+          </div>
+          <div style={{ flex: 1, minWidth: 140 }}>
+            <Field label="현장/행선지">
+              <TextInput value={site} onChange={(e) => setSite(e.target.value)} placeholder="예: 강남 현장" />
+            </Field>
+          </div>
+        </div>
         <Field label="비고">
           <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} />
         </Field>
@@ -3017,6 +3035,7 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
   const [showEventForm, setShowEventForm] = useState(false);
   const [editEvent, setEditEvent] = useState(null);
   const [notice, setNotice] = useState("");
+  const [viewMode, setViewMode] = useState("calendar"); // "calendar" | "staff"
   const isMember = role === "member";
 
   const year = cursor.getFullYear();
@@ -3048,6 +3067,20 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
     }
     return map;
   }, [transactions, events]);
+
+  const staffRows = useMemo(() => {
+    const map = {};
+    const monthPrefix = `${year}-${String(month + 1).padStart(2, "0")}`;
+    for (const e of events) {
+      if (!e.date || !e.date.startsWith(monthPrefix)) continue;
+      const person = (e.assignee || "").trim() || "미지정";
+      if (!map[person]) map[person] = {};
+      const day = Number(e.date.slice(8, 10));
+      if (!map[person][day]) map[person][day] = [];
+      map[person][day].push(e);
+    }
+    return Object.keys(map).sort().map((person) => ({ person, days: map[person] }));
+  }, [events, year, month]);
 
   function dateStr(d) {
     const mm = String(month + 1).padStart(2, "0");
@@ -3120,14 +3153,14 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
       rows.push({
         "날짜": t.date, "구분": t.type === "in" ? "입고" : "출고",
         "품목": itemName(t.itemId), "수량": t.qty, "단위": t.unit || "", "출고종류": t.outType || "",
-        "거래처": vendorName(t.vendorId), "프로젝트": projectName(t.projectId), "비고": t.note || "",
+        "담당자": "", "현장": "", "거래처": vendorName(t.vendorId), "프로젝트": projectName(t.projectId), "비고": t.note || "",
       });
     }
     for (const e of events) {
       if (!e.date.startsWith(monthPrefix)) continue;
       rows.push({
         "날짜": e.date, "구분": "일정", "품목": e.title, "수량": "", "단위": "", "출고종류": "",
-        "거래처": "", "프로젝트": "", "비고": e.note || "",
+        "담당자": e.assignee || "", "현장": e.site || "", "거래처": "", "프로젝트": "", "비고": e.note || "",
       });
     }
     rows.sort((a, b) => (a["날짜"] < b["날짜"] ? -1 : 1));
@@ -3159,45 +3192,123 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
             </span>
             <IconBtn title="다음 달" color="#6B7280" onClick={nextMonth}><ChevronRight size={15} /></IconBtn>
           </div>
-          <div className="no-print" style={{ display: "flex", gap: 6 }}>
+          <div className="no-print" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <GhostButton
+              onClick={() => setViewMode(viewMode === "calendar" ? "staff" : "calendar")}
+              style={{ padding: "6px 12px", fontSize: 12.5, ...(viewMode === "staff" ? { background: "#14213D", color: "#fff" } : {}) }}
+            >
+              {viewMode === "calendar" ? "담당자별 보기" : "달력 보기"}
+            </GhostButton>
             <GhostButton onClick={goToday} style={{ padding: "6px 12px", fontSize: 12.5 }}>오늘</GhostButton>
             <GhostButton onClick={exportSchedule} style={{ padding: "6px 12px", fontSize: 12.5 }}>
               <FileDown size={13} /> 엑셀로 저장
             </GhostButton>
-            <GhostButton onClick={() => printElementById("calendar-print-area")} style={{ padding: "6px 12px", fontSize: 12.5 }}>
+            <GhostButton onClick={() => printElementById("calendar-print-area", "printing-calendar")} style={{ padding: "6px 12px", fontSize: 12.5 }}>
               <Printer size={13} /> 인쇄
             </GhostButton>
           </div>
         </div>
 
+        {viewMode === "staff" ? (
+          <div className="table-scroll">
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr>
+                  <th style={{ position: "sticky", left: 0, background: "#F7F8FA", padding: "6px 10px", textAlign: "left", fontSize: 11.5, color: "#6B7280", borderBottom: "1px solid #EEF0F3", zIndex: 1 }}>담당자</th>
+                  {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => {
+                    const ds = dateStr(d);
+                    const isToday = ds === todayStr();
+                    return (
+                      <th key={d} style={{ padding: "6px 6px", textAlign: "center", fontSize: 11, color: isToday ? "#FB8500" : "#8A93A6", borderBottom: "1px solid #EEF0F3", minWidth: 56 }}>
+                        {d}
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {staffRows.length === 0 ? (
+                  <tr><td colSpan={daysInMonth + 1} style={{ padding: 24, textAlign: "center", color: "#A2A9B8" }}>이번 달에 담당자가 등록된 일정이 없습니다.</td></tr>
+                ) : (
+                  staffRows.map((row) => (
+                    <tr key={row.person} style={{ borderTop: "1px solid #F1F2F5" }}>
+                      <td style={{ position: "sticky", left: 0, background: "#fff", padding: "8px 10px", fontWeight: 700, color: "#14213D", whiteSpace: "nowrap" }}>{row.person}</td>
+                      {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => {
+                        const evs = row.days[d] || [];
+                        return (
+                          <td key={d} style={{ padding: "4px 6px", textAlign: "center", verticalAlign: "top" }}>
+                            {evs.map((e) => (
+                              <button
+                                key={e.id}
+                                onClick={() => setEditEvent(e)}
+                                title={e.title}
+                                style={{
+                                  display: "block", width: "100%", border: "none", borderRadius: 5, padding: "3px 5px", marginBottom: 2,
+                                  background: "#EAF1FE", color: "#0EA5E9", fontSize: 10.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                                }}
+                              >
+                                {e.site || e.title}
+                              </button>
+                            ))}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+        <>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 4 }}>
           {WEEKDAYS.map((w) => (
             <div key={w} style={{ textAlign: "center", fontSize: 11.5, fontWeight: 700, color: "#A2A9B8", padding: "4px 0" }}>{w}</div>
           ))}
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+        <div className="calendar-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
           {cells.map((d, idx) => {
             if (d === null) return <div key={idx} />;
             const ds = dateStr(d);
             const info = dayMap[ds] || {};
+            const dayEvents = events.filter((e) => e.date === ds);
             const isSelected = ds === selectedDate;
             const isToday = ds === todayStr();
             return (
               <button
                 key={idx}
                 onClick={() => setSelectedDate(ds)}
+                className="calendar-cell"
                 style={{
-                  minHeight: 56, borderRadius: 8, padding: "6px 4px", cursor: "pointer",
+                  minHeight: 74, borderRadius: 8, padding: "5px 5px", cursor: "pointer",
                   border: isSelected ? "2px solid #FB8500" : isToday ? "1.5px solid #14213D" : "1px solid #F1F2F5",
                   background: isSelected ? "#FFF3E6" : "#fff",
-                  display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
+                  display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, textAlign: "left",
+                  overflow: "hidden",
                 }}
               >
-                <span style={{ fontSize: 12.5, fontWeight: isToday ? 900 : 600, color: "#14213D" }}>{d}</span>
-                <div style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "center" }}>
-                  {info.inCount > 0 && <span style={{ width: 6, height: 6, borderRadius: 999, background: "#2A9D8F" }} />}
-                  {info.outCount > 0 && <span style={{ width: 6, height: 6, borderRadius: 999, background: "#E63946" }} />}
-                  {info.eventCount > 0 && <span style={{ width: 6, height: 6, borderRadius: 999, background: "#8E7CC3" }} />}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span style={{ fontSize: 12.5, fontWeight: isToday ? 900 : 600, color: "#14213D" }}>{d}</span>
+                  <div style={{ display: "flex", gap: 3 }}>
+                    {info.inCount > 0 && <span style={{ width: 5, height: 5, borderRadius: 999, background: "#2A9D8F" }} />}
+                    {info.outCount > 0 && <span style={{ width: 5, height: 5, borderRadius: 999, background: "#E63946" }} />}
+                  </div>
+                </div>
+                <div className="calendar-cell-events" style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                  {dayEvents.slice(0, 3).map((e) => (
+                    <div
+                      key={e.id}
+                      style={{
+                        fontSize: 9.5, fontWeight: 700, color: "#5B3F94", background: "#F1EBFB", borderRadius: 3,
+                        padding: "1px 3px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                      }}
+                    >
+                      {e.assignee ? `${e.assignee}: ${e.site || e.title}` : (e.site || e.title)}
+                    </div>
+                  ))}
+                  {dayEvents.length > 3 && (
+                    <div style={{ fontSize: 9, color: "#A2A9B8" }}>+{dayEvents.length - 3}건 더</div>
+                  )}
                 </div>
               </button>
             );
@@ -3207,8 +3318,10 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
         <div style={{ display: "flex", gap: 14, marginTop: 14, fontSize: 11.5, color: "#6B7280" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: "#2A9D8F", display: "inline-block" }} /> 입고</span>
           <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: "#E63946", display: "inline-block" }} /> 출고</span>
-          <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: "#8E7CC3", display: "inline-block" }} /> 일정</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 8, height: 8, borderRadius: 3, background: "#F1EBFB", border: "1px solid #E9E1F7", display: "inline-block" }} /> 담당자: 현장</span>
         </div>
+        </>
+        )}
       </div>
 
       <div style={{ flex: "1 1 280px", background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: 16, minWidth: 260 }}>
@@ -3267,6 +3380,11 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
                       <span style={{ marginLeft: 6, padding: "1px 7px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>승인대기</span>
                     )}
                   </div>
+                  {(e.assignee || e.site) && (
+                    <div style={{ color: "#3B82F6", fontWeight: 600 }}>
+                      {e.assignee}{e.assignee && e.site ? " → " : ""}{e.site}
+                    </div>
+                  )}
                   {e.note && <div style={{ color: "#8A93A6" }}>{e.note}</div>}
                 </button>
               ))}
