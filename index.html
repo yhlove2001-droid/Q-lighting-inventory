@@ -44,8 +44,14 @@
         body.printing-calendar .calendar-cell > div:first-child span:first-child {
           font-size: 18px !important;
         }
-        body.printing-calendar .calendar-cell-events div {
-          font-size: 13px !important; padding: 2px 5px !important; margin-bottom: 2px;
+        body.printing-calendar .calendar-cell-events > div {
+          padding: 2px 5px !important; margin-bottom: 2px;
+        }
+        body.printing-calendar .calendar-cell-events > div > div:first-child {
+          font-size: 13px !important;
+        }
+        body.printing-calendar .calendar-cell-events > div > div:last-child {
+          font-size: 11px !important;
         }
         /* 하단 범례는 인쇄에서는 공간 낭비라 생략 */
         body.printing-calendar .calendar-legend {
