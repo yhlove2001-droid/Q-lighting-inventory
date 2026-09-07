@@ -84,6 +84,12 @@ function colorForSite(key) {
   for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
   return EVENT_COLOR_PALETTE[hash % EVENT_COLOR_PALETTE.length];
 }
+// 직원 이름을 "성+직책"으로 축약 표시 (예: 김철수 실장 -> 김실장). 직책이 없으면 이름 그대로.
+function staffLabel(name, staffList) {
+  const s = (staffList || []).find((st) => st.name === name);
+  if (!s || !s.position) return name;
+  return name.slice(0, 1) + s.position;
+}
 // 오늘부터 dateStr까지 남은 일수 (음수면 지난 날짜)
 function daysUntil(dateStr) {
   const today = new Date(todayStr() + "T00:00:00");
@@ -2742,7 +2748,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
 
 // ---------- Dashboard tab ----------
 // ---------- Dashboard: 월간 일정표 (인쇄 가능) ----------
-function MonthlyScheduleCard({ items, transactions, events }) {
+function MonthlyScheduleCard({ items, transactions, events, staff = [] }) {
   const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
   const year = cursor.getFullYear();
   const month = cursor.getMonth();
@@ -2761,7 +2767,8 @@ function MonthlyScheduleCard({ items, transactions, events }) {
     }
     for (const e of events) {
       if (!e.date) continue;
-      const label = e.assignees?.length > 0 ? `${e.assignees.join(", ")}: ${e.site || e.title}` : (e.site || e.title);
+      const names = (e.assignees || []).map((n) => staffLabel(n, staff));
+      const label = names.length > 0 ? `${names.join(",")}: ${e.site || e.title}` : (e.site || e.title);
       for (const ds of eachDateInRange(e.date, e.endDate || e.date)) {
         if (!map[ds]) map[ds] = { ins: [], outs: [] };
         if (!map[ds].evts) map[ds].evts = [];
@@ -2770,7 +2777,7 @@ function MonthlyScheduleCard({ items, transactions, events }) {
     }
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transactions, events, items]);
+  }, [transactions, events, items, staff]);
 
   function dateStr(d) {
     const mm = String(month + 1).padStart(2, "0");
@@ -2837,7 +2844,7 @@ function MonthlyScheduleCard({ items, transactions, events }) {
   );
 }
 
-function DashboardTab({ items, transactions, vendors, events }) {
+function DashboardTab({ items, transactions, vendors, events, staff = [] }) {
   const stockByItem = useMemo(() => computeStockByItem(transactions), [transactions]);
   const lastDates = useMemo(() => computeLastDates(transactions), [transactions]);
 
@@ -2927,7 +2934,7 @@ function DashboardTab({ items, transactions, vendors, events }) {
         ))}
       </div>
 
-      <MonthlyScheduleCard items={items} transactions={transactions} events={events} />
+      <MonthlyScheduleCard items={items} transactions={transactions} events={events} staff={staff} />
 
       <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", padding: "16px 18px", marginBottom: 20 }}>
         <div style={{ fontWeight: 800, fontSize: 14, color: "#14213D", marginBottom: 4 }}>품목별 평월 대비 현재수량</div>
@@ -3114,6 +3121,7 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
   const [notice, setNotice] = useState("");
   const [viewMode, setViewMode] = useState("calendar"); // "calendar" | "staff"
   const [newStaffName, setNewStaffName] = useState("");
+  const [newStaffPosition, setNewStaffPosition] = useState("");
   const isMember = role === "member";
 
   const year = cursor.getFullYear();
@@ -3234,19 +3242,20 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
     setEditEvent(null);
   }
 
-  async function addStaff(name) {
+  async function addStaff(name, position) {
     const trimmed = name.trim();
+    const trimmedPos = (position || "").trim();
     if (!trimmed) return;
     if (isMember) {
       const created = await insertPending({
-        entity: "staff", action: "create", targetId: null, payload: { name: trimmed },
-        summary: `직원 '${trimmed}' 등록 요청`, requestedBy: username,
+        entity: "staff", action: "create", targetId: null, payload: { name: trimmed, position: trimmedPos },
+        summary: `직원 '${trimmed}${trimmedPos ? " " + trimmedPos : ""}' 등록 요청`, requestedBy: username,
       });
       setPending([created, ...pending]);
       setNotice("직원 등록 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
       return;
     }
-    const created = await insertStaff({ name: trimmed });
+    const created = await insertStaff({ name: trimmed, position: trimmedPos });
     setStaff([...staff, created].sort((a, b) => a.name.localeCompare(b.name)));
   }
 
@@ -3262,6 +3271,25 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
     }
     await deleteStaffRow(person.id);
     setStaff(staff.filter((s) => s.id !== person.id));
+  }
+
+  async function editStaff(person, newName, newPosition) {
+    const trimmedName = (newName || "").trim();
+    if (!trimmedName) return;
+    const trimmedPos = (newPosition || "").trim();
+    if (trimmedName === person.name && trimmedPos === (person.position || "")) return; // 변경 없으면 요청/저장 생략
+    const payload = { name: trimmedName, position: trimmedPos };
+    if (isMember) {
+      const created = await insertPending({
+        entity: "staff", action: "edit", targetId: person.id, payload,
+        summary: `직원 '${person.name}' 정보 수정 요청 (${trimmedName}${trimmedPos ? " " + trimmedPos : ""})`, requestedBy: username,
+      });
+      setPending([created, ...pending]);
+      setNotice("직원 정보 수정 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
+      return;
+    }
+    const updated = await updateStaff(person.id, payload);
+    setStaff(staff.map((s) => (s.id === person.id ? updated : s)).sort((a, b) => a.name.localeCompare(b.name)));
   }
 
   function exportSchedule() {
@@ -3407,7 +3435,6 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
                   border: isSelected ? "2px solid #FB8500" : isToday ? "1.5px solid #14213D" : "1px solid #F1F2F5",
                   background: isSelected ? "#FFF3E6" : "#fff",
                   display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2, textAlign: "left",
-                  overflow: "hidden",
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -3420,15 +3447,16 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
                 <div className="calendar-cell-events" style={{ display: "flex", flexDirection: "column", gap: 1 }}>
                   {dayEvents.slice(0, 3).map((e) => {
                     const c = colorForSite(e.site || e.title);
+                    const names = (e.assignees || []).map((n) => staffLabel(n, staff));
                     return (
                       <div
                         key={e.id}
                         style={{
                           fontSize: 9.5, fontWeight: 700, color: c.fg, background: c.bg, borderRadius: 3,
-                          padding: "1px 3px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                          padding: "1px 3px", whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.25,
                         }}
                       >
-                        {e.assignees?.length > 0 ? `${e.assignees.join(", ")}: ${e.site || e.title}` : (e.site || e.title)}
+                        {names.length > 0 ? `${names.join(",")}: ${e.site || e.title}` : (e.site || e.title)}
                       </div>
                     );
                   })}
@@ -3453,45 +3481,61 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
       <div style={{ flex: "1 1 280px", display: "flex", flexDirection: "column", gap: 16, minWidth: 260 }}>
       <div className="no-print" style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: 16 }}>
         <div style={{ fontWeight: 800, fontSize: 14, color: "#14213D", marginBottom: 10 }}>직원 명단</div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+        <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
           <TextInput
             value={newStaffName}
             onChange={(e) => setNewStaffName(e.target.value)}
-            placeholder="예: 김철수"
-            style={{ flex: 1 }}
+            placeholder="이름 (예: 김철수)"
+            style={{ flex: 2, minWidth: 90 }}
+          />
+          <TextInput
+            value={newStaffPosition}
+            onChange={(e) => setNewStaffPosition(e.target.value)}
+            placeholder="직책 (예: 실장)"
+            style={{ flex: 1, minWidth: 70 }}
           />
           <PrimaryButton
-            onClick={() => { addStaff(newStaffName); setNewStaffName(""); }}
+            onClick={() => { addStaff(newStaffName, newStaffPosition); setNewStaffName(""); setNewStaffPosition(""); }}
             disabled={!newStaffName.trim()}
             style={{ padding: "8px 12px", fontSize: 12.5, opacity: newStaffName.trim() ? 1 : 0.5 }}
           >
             {isMember ? "요청" : "추가"}
           </PrimaryButton>
         </div>
+        <div style={{ fontSize: 10.5, color: "#A2A9B8", marginBottom: 8, marginTop: -4 }}>직책을 입력하면 달력에는 "성+직책"으로 줄여서 표시됩니다 (예: 김철수 실장 → 김실장)</div>
         {staff.length === 0 ? (
           <div style={{ fontSize: 12, color: "#A2A9B8" }}>등록된 직원이 없습니다.</div>
         ) : (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {staff.map((s) => (
-              <span
-                key={s.id}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 8px", borderRadius: 999,
-                  background: "#F1EBFB", color: "#5B3F94", fontSize: 12, fontWeight: 700,
-                }}
+              <div
+                key={`${s.id}:${s.name}:${s.position || ""}`}
+                style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "6px 8px", borderRadius: 8, background: "#FAFBFC", border: "1px solid #F1F2F5" }}
               >
-                {s.name}
+                <TextInput
+                  defaultValue={s.name}
+                  onBlur={(e) => editStaff(s, e.target.value, s.position)}
+                  placeholder="이름"
+                  style={{ flex: 2, minWidth: 70, padding: "5px 8px", fontSize: 12.5 }}
+                />
+                <TextInput
+                  defaultValue={s.position}
+                  onBlur={(e) => editStaff(s, s.name, e.target.value)}
+                  placeholder="직책"
+                  style={{ flex: 1, minWidth: 55, padding: "5px 8px", fontSize: 12.5 }}
+                />
+                <span style={{ fontSize: 11, color: "#5B3F94", fontWeight: 700, minWidth: 40 }}>→ {staffLabel(s.name, staff)}</span>
                 {hasPendingStaff(s.id) && (
                   <span style={{ fontSize: 9.5, color: "#FB8500" }}>(대기)</span>
                 )}
                 <button
                   onClick={() => removeStaff(s)}
                   title={isMember ? "삭제 요청" : "삭제"}
-                  style={{ border: "none", background: "none", cursor: "pointer", color: "#5B3F94", display: "flex", padding: 0 }}
+                  style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 5, width: 24, height: 24, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#E63946", flexShrink: 0 }}
                 >
-                  <X size={11} />
+                  <X size={12} />
                 </button>
-              </span>
+              </div>
             ))}
           </div>
         )}
@@ -4038,7 +4082,7 @@ export default function App() {
           {loading ? (
             <div style={{ color: "#A2A9B8", fontSize: 13.5 }}>불러오는 중...</div>
           ) : tab === "dashboard" ? (
-            <DashboardTab items={items} transactions={transactions} vendors={vendors} events={events} />
+            <DashboardTab items={items} transactions={transactions} vendors={vendors} events={events} staff={staff} />
           ) : tab === "inventory" ? (
             <InventoryTab
               items={items} setItems={setItems}
