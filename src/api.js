@@ -231,7 +231,7 @@ export async function deleteIncomingRequestRow(id) {
 
 // ---------- staff (직원 명단) ----------
 function rowToStaff(r) {
-  return { id: r.id, name: r.name, createdAt: r.created_at };
+  return { id: r.id, name: r.name, position: r.position || "", createdAt: r.created_at };
 }
 export async function fetchStaff() {
   const { data, error } = await supabase.from("staff").select("*").order("name", { ascending: true });
@@ -239,12 +239,12 @@ export async function fetchStaff() {
   return data.map(rowToStaff);
 }
 export async function insertStaff(s) {
-  const { data, error } = await supabase.from("staff").insert({ name: s.name }).select().single();
+  const { data, error } = await supabase.from("staff").insert({ name: s.name, position: s.position || null }).select().single();
   if (error) throw error;
   return rowToStaff(data);
 }
 export async function updateStaff(id, s) {
-  const { data, error } = await supabase.from("staff").update({ name: s.name }).eq("id", id).select().single();
+  const { data, error } = await supabase.from("staff").update({ name: s.name, position: s.position || null }).eq("id", id).select().single();
   if (error) throw error;
   return rowToStaff(data);
 }
