@@ -22,12 +22,20 @@
         }
         body.print-mode-active .no-print { display: none !important; }
 
-        /* 달력 인쇄 시(printing-calendar일 때만) 페이지 꽉 차게: 칸을 크게, 글씨도 크게 */
+        /* 달력 인쇄 시(printing-calendar일 때만) 페이지 꽉 차게: 여백 없이 칸이 남는 공간을 채움 */
+        @page { margin: 6mm; }
         body.printing-calendar .print-target {
-          width: 100vw !important; max-width: none !important;
+          position: fixed !important; inset: 0; left: 0; top: 0;
+          width: 100vw !important; height: 100vh !important; max-width: none !important;
+          display: flex !important; flex-direction: column !important;
+          padding: 4mm !important; margin: 0 !important;
+        }
+        body.printing-calendar .print-target > div:first-child {
+          flex-shrink: 0;
         }
         body.printing-calendar .calendar-grid {
-          height: calc(100vh - 90px) !important;
+          flex: 1 1 auto !important;
+          height: auto !important;
           grid-auto-rows: 1fr !important;
         }
         body.printing-calendar .calendar-cell {
@@ -38,6 +46,10 @@
         }
         body.printing-calendar .calendar-cell-events div {
           font-size: 13px !important; padding: 2px 5px !important; margin-bottom: 2px;
+        }
+        /* 하단 범례는 인쇄에서는 공간 낭비라 생략 */
+        body.printing-calendar .calendar-legend {
+          display: none !important;
         }
       }
 
