@@ -2768,7 +2768,7 @@ function MonthlyScheduleCard({ items, transactions, events, staff = [] }) {
     for (const e of events) {
       if (!e.date) continue;
       const names = (e.assignees || []).map((n) => staffLabel(n, staff));
-      const label = names.length > 0 ? `${names.join(",")}: ${e.site || e.title}` : (e.site || e.title);
+      const label = names.length > 0 ? `${e.site || e.title} (${names.join(", ")})` : (e.site || e.title);
       for (const ds of eachDateInRange(e.date, e.endDate || e.date)) {
         if (!map[ds]) map[ds] = { ins: [], outs: [] };
         if (!map[ds].evts) map[ds].evts = [];
@@ -3246,31 +3246,41 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
     const trimmed = name.trim();
     const trimmedPos = (position || "").trim();
     if (!trimmed) return;
-    if (isMember) {
-      const created = await insertPending({
-        entity: "staff", action: "create", targetId: null, payload: { name: trimmed, position: trimmedPos },
-        summary: `직원 '${trimmed}${trimmedPos ? " " + trimmedPos : ""}' 등록 요청`, requestedBy: username,
-      });
-      setPending([created, ...pending]);
-      setNotice("직원 등록 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
-      return;
+    try {
+      if (isMember) {
+        const created = await insertPending({
+          entity: "staff", action: "create", targetId: null, payload: { name: trimmed, position: trimmedPos },
+          summary: `직원 '${trimmed}${trimmedPos ? " " + trimmedPos : ""}' 등록 요청`, requestedBy: username,
+        });
+        setPending([created, ...pending]);
+        setNotice("직원 등록 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
+        return;
+      }
+      const created = await insertStaff({ name: trimmed, position: trimmedPos });
+      setStaff([...staff, created].sort((a, b) => a.name.localeCompare(b.name)));
+    } catch (err) {
+      console.error(err);
+      setNotice(`직원 등록에 실패했습니다: ${err.message || err}`);
     }
-    const created = await insertStaff({ name: trimmed, position: trimmedPos });
-    setStaff([...staff, created].sort((a, b) => a.name.localeCompare(b.name)));
   }
 
   async function removeStaff(person) {
-    if (isMember) {
-      const created = await insertPending({
-        entity: "staff", action: "delete", targetId: person.id, payload: null,
-        summary: `직원 '${person.name}' 삭제 요청`, requestedBy: username,
-      });
-      setPending([created, ...pending]);
-      setNotice("직원 삭제 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
-      return;
+    try {
+      if (isMember) {
+        const created = await insertPending({
+          entity: "staff", action: "delete", targetId: person.id, payload: null,
+          summary: `직원 '${person.name}' 삭제 요청`, requestedBy: username,
+        });
+        setPending([created, ...pending]);
+        setNotice("직원 삭제 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
+        return;
+      }
+      await deleteStaffRow(person.id);
+      setStaff(staff.filter((s) => s.id !== person.id));
+    } catch (err) {
+      console.error(err);
+      setNotice(`직원 삭제에 실패했습니다: ${err.message || err}`);
     }
-    await deleteStaffRow(person.id);
-    setStaff(staff.filter((s) => s.id !== person.id));
   }
 
   async function editStaff(person, newName, newPosition) {
@@ -3279,17 +3289,23 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
     const trimmedPos = (newPosition || "").trim();
     if (trimmedName === person.name && trimmedPos === (person.position || "")) return; // 변경 없으면 요청/저장 생략
     const payload = { name: trimmedName, position: trimmedPos };
-    if (isMember) {
-      const created = await insertPending({
-        entity: "staff", action: "edit", targetId: person.id, payload,
-        summary: `직원 '${person.name}' 정보 수정 요청 (${trimmedName}${trimmedPos ? " " + trimmedPos : ""})`, requestedBy: username,
-      });
-      setPending([created, ...pending]);
-      setNotice("직원 정보 수정 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
-      return;
+    try {
+      if (isMember) {
+        const created = await insertPending({
+          entity: "staff", action: "edit", targetId: person.id, payload,
+          summary: `직원 '${person.name}' 정보 수정 요청 (${trimmedName}${trimmedPos ? " " + trimmedPos : ""})`, requestedBy: username,
+        });
+        setPending([created, ...pending]);
+        setNotice("직원 정보 수정 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
+        return;
+      }
+      const updated = await updateStaff(person.id, payload);
+      setStaff(staff.map((s) => (s.id === person.id ? updated : s)).sort((a, b) => a.name.localeCompare(b.name)));
+      setNotice(`저장되었습니다: ${trimmedName}${trimmedPos ? " " + trimmedPos : ""}`);
+    } catch (err) {
+      console.error(err);
+      setNotice(`직원 정보 저장에 실패했습니다: ${err.message || err}`);
     }
-    const updated = await updateStaff(person.id, payload);
-    setStaff(staff.map((s) => (s.id === person.id ? updated : s)).sort((a, b) => a.name.localeCompare(b.name)));
   }
 
   function exportSchedule() {
@@ -3444,7 +3460,7 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
                     {info.outCount > 0 && <span style={{ width: 5, height: 5, borderRadius: 999, background: "#E63946" }} />}
                   </div>
                 </div>
-                <div className="calendar-cell-events" style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                <div className="calendar-cell-events" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                   {dayEvents.slice(0, 3).map((e) => {
                     const c = colorForSite(e.site || e.title);
                     const names = (e.assignees || []).map((n) => staffLabel(n, staff));
@@ -3452,11 +3468,12 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
                       <div
                         key={e.id}
                         style={{
-                          fontSize: 9.5, fontWeight: 700, color: c.fg, background: c.bg, borderRadius: 3,
-                          padding: "1px 3px", whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.25,
+                          fontSize: 9.5, color: c.fg, background: c.bg, borderRadius: 3,
+                          padding: "2px 4px", whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.3,
                         }}
                       >
-                        {names.length > 0 ? `${names.join(",")}: ${e.site || e.title}` : (e.site || e.title)}
+                        <div style={{ fontWeight: 800 }}>{e.site || e.title}</div>
+                        {names.length > 0 && <div style={{ fontWeight: 600, opacity: 0.9 }}>{names.join(", ")}</div>}
                       </div>
                     );
                   })}
