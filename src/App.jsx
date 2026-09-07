@@ -65,6 +65,25 @@ function eachDateInRange(startStr, endStr) {
   }
   return dates;
 }
+// 현장/일정별로 색을 다르게 줘서 구분하기 쉽게 (같은 현장은 항상 같은 색)
+const EVENT_COLOR_PALETTE = [
+  { bg: "#F1EBFB", fg: "#5B3F94" }, // 보라
+  { bg: "#EAF1FE", fg: "#2563EB" }, // 파랑
+  { bg: "#EAF7F5", fg: "#0F766E" }, // 청록
+  { bg: "#FFF3E6", fg: "#C2661B" }, // 주황
+  { bg: "#FCEBEC", fg: "#B91C3C" }, // 빨강
+  { bg: "#ECFCCB", fg: "#4D7C0F" }, // 초록
+  { bg: "#FEF3C7", fg: "#92400E" }, // 황토
+  { bg: "#E0F2FE", fg: "#0369A1" }, // 하늘
+  { bg: "#FCE7F3", fg: "#BE185D" }, // 분홍
+  { bg: "#E5E7EB", fg: "#374151" }, // 회색(미지정용)
+];
+function colorForSite(key) {
+  const s = (key || "").trim() || "__none__";
+  let hash = 0;
+  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+  return EVENT_COLOR_PALETTE[hash % EVENT_COLOR_PALETTE.length];
+}
 // 오늘부터 dateStr까지 남은 일수 (음수면 지난 날짜)
 function daysUntil(dateStr) {
   const today = new Date(todayStr() + "T00:00:00");
@@ -2746,7 +2765,7 @@ function MonthlyScheduleCard({ items, transactions, events }) {
       for (const ds of eachDateInRange(e.date, e.endDate || e.date)) {
         if (!map[ds]) map[ds] = { ins: [], outs: [] };
         if (!map[ds].evts) map[ds].evts = [];
-        map[ds].evts.push(label);
+        map[ds].evts.push({ label, site: e.site || e.title });
       }
     }
     return map;
@@ -2803,7 +2822,7 @@ function MonthlyScheduleCard({ items, transactions, events }) {
               <div style={{ fontWeight: isToday ? 900 : 700, fontSize: 11.5, color: "#14213D", marginBottom: 2 }}>{d}</div>
               {(info.ins || []).slice(0, 2).map((s, i) => <div key={"i" + i} style={{ color: "#2A9D8F" }}>+{s}</div>)}
               {(info.outs || []).slice(0, 2).map((s, i) => <div key={"o" + i} style={{ color: "#E63946" }}>-{s}</div>)}
-              {(info.evts || []).slice(0, 2).map((s, i) => <div key={"e" + i} style={{ color: "#8E7CC3" }}>{s}</div>)}
+              {(info.evts || []).slice(0, 2).map((ev, i) => <div key={"e" + i} style={{ color: colorForSite(ev.site).fg }}>{ev.label}</div>)}
             </div>
           );
         })}
@@ -3338,19 +3357,22 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
                         const evs = row.days[d] || [];
                         return (
                           <td key={d} style={{ padding: "4px 6px", textAlign: "center", verticalAlign: "top" }}>
-                            {evs.map((e) => (
-                              <button
-                                key={e.id}
-                                onClick={() => setEditEvent(e)}
-                                title={e.title}
-                                style={{
-                                  display: "block", width: "100%", border: "none", borderRadius: 5, padding: "3px 5px", marginBottom: 2,
-                                  background: "#EAF1FE", color: "#0EA5E9", fontSize: 10.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                                }}
-                              >
-                                {e.site || e.title}
-                              </button>
-                            ))}
+                            {evs.map((e) => {
+                              const c = colorForSite(e.site || e.title);
+                              return (
+                                <button
+                                  key={e.id}
+                                  onClick={() => setEditEvent(e)}
+                                  title={e.title}
+                                  style={{
+                                    display: "block", width: "100%", border: "none", borderRadius: 5, padding: "3px 5px", marginBottom: 2,
+                                    background: c.bg, color: c.fg, fontSize: 10.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                                  }}
+                                >
+                                  {e.site || e.title}
+                                </button>
+                              );
+                            })}
                           </td>
                         );
                       })}
@@ -3396,17 +3418,20 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
                   </div>
                 </div>
                 <div className="calendar-cell-events" style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                  {dayEvents.slice(0, 3).map((e) => (
-                    <div
-                      key={e.id}
-                      style={{
-                        fontSize: 9.5, fontWeight: 700, color: "#5B3F94", background: "#F1EBFB", borderRadius: 3,
-                        padding: "1px 3px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                      }}
-                    >
-                      {e.assignees?.length > 0 ? `${e.assignees.join(", ")}: ${e.site || e.title}` : (e.site || e.title)}
-                    </div>
-                  ))}
+                  {dayEvents.slice(0, 3).map((e) => {
+                    const c = colorForSite(e.site || e.title);
+                    return (
+                      <div
+                        key={e.id}
+                        style={{
+                          fontSize: 9.5, fontWeight: 700, color: c.fg, background: c.bg, borderRadius: 3,
+                          padding: "1px 3px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                        }}
+                      >
+                        {e.assignees?.length > 0 ? `${e.assignees.join(", ")}: ${e.site || e.title}` : (e.site || e.title)}
+                      </div>
+                    );
+                  })}
                   {dayEvents.length > 3 && (
                     <div style={{ fontSize: 9, color: "#A2A9B8" }}>+{dayEvents.length - 3}건 더</div>
                   )}
@@ -3416,7 +3441,7 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
           })}
         </div>
 
-        <div style={{ display: "flex", gap: 14, marginTop: 14, fontSize: 11.5, color: "#6B7280" }}>
+        <div className="calendar-legend" style={{ display: "flex", gap: 14, marginTop: 14, fontSize: 11.5, color: "#6B7280" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: "#2A9D8F", display: "inline-block" }} /> 입고</span>
           <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: "#E63946", display: "inline-block" }} /> 출고</span>
           <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 8, height: 8, borderRadius: 3, background: "#F1EBFB", border: "1px solid #E9E1F7", display: "inline-block" }} /> 담당자: 현장</span>
