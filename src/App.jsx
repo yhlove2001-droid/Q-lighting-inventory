@@ -592,84 +592,123 @@ function ItemFormModal({ initial, onSave, onClose }) {
 }
 
 // ---------- 입고예정 등록 폼 ----------
-function IncomingRequestFormModal({ items, onSave, onClose }) {
-  const [isCustom, setIsCustom] = useState(true);
-  const [itemId, setItemId] = useState("");
-  const [customName, setCustomName] = useState("");
-  const [qty, setQty] = useState(1);
-  const [unit, setUnit] = useState("EA");
+function IncomingRequestFormModal({ items, projects = [], onSave, onClose }) {
+  const [projectId, setProjectId] = useState("");
   const [expectedDate, setExpectedDate] = useState("");
+  const [rows, setRows] = useState([
+    { id: uid(), isCustom: true, itemId: "", customName: "", qty: 1, unit: "EA" },
+  ]);
 
-  const selectedItem = items.find((i) => i.id === itemId);
-
-  function submit() {
-    const name = isCustom ? customName.trim() : (selectedItem?.name || "");
-    if (!name) return;
-    if (!qty || Number(qty) <= 0) return;
-    onSave({
-      projectId: null,
-      itemId: isCustom ? null : (itemId || null),
-      name,
-      qty: Number(qty),
-      unit: (isCustom ? unit : (selectedItem?.unit || unit || "EA")).trim() || "EA",
-      expectedDate: expectedDate || null,
-    });
+  function addRow() {
+    setRows((prev) => [...prev, { id: uid(), isCustom: true, itemId: "", customName: "", qty: 1, unit: "EA" }]);
+  }
+  function removeRow(id) {
+    setRows((prev) => (prev.length > 1 ? prev.filter((r) => r.id !== id) : prev));
+  }
+  function updateRow(id, patch) {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   }
 
-  function handleKeyDown(e) {
-    if (e.key === "Enter" && e.target.tagName !== "TEXTAREA") submit();
+  function submit() {
+    const payloads = [];
+    for (const r of rows) {
+      const selectedItem = items.find((i) => i.id === r.itemId);
+      const name = r.isCustom ? r.customName.trim() : (selectedItem?.name || "");
+      if (!name || !r.qty || Number(r.qty) <= 0) continue;
+      payloads.push({
+        projectId: projectId || null,
+        itemId: r.isCustom ? null : (r.itemId || null),
+        name,
+        qty: Number(r.qty),
+        unit: (r.isCustom ? r.unit : (selectedItem?.unit || r.unit || "EA")).trim() || "EA",
+        expectedDate: expectedDate || null,
+      });
+    }
+    if (payloads.length === 0) return;
+    onSave(payloads);
   }
 
   return (
-    <Modal title="입고예정 등록" onClose={onClose}>
-      <div onKeyDown={handleKeyDown} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <Field label="품목" required>
-          {isCustom ? (
-            <div style={{ display: "flex", gap: 6 }}>
-              <TextInput
-                value={customName}
-                onChange={(e) => setCustomName(e.target.value)}
-                placeholder="새로 들어오는 품목명 (예: 산업용 센서 A)"
-                autoFocus
-                style={{ flex: 1 }}
-              />
-              <button
-                type="button"
-                onClick={() => { setIsCustom(false); setCustomName(""); }}
-                title="이미 등록된 품목에서 선택"
-                style={{ border: "1px solid #DADFE6", background: "#fff", borderRadius: 6, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#8A93A6", flexShrink: 0 }}
-              >
-                <Search size={13} />
-              </button>
-            </div>
-          ) : (
-            <ItemPicker items={items} value={itemId} onSelect={(id) => setItemId(id)} onCustom={() => { setIsCustom(true); setItemId(""); }} placeholder="기존 품목명 검색" />
-          )}
-          <div style={{ fontSize: 11, color: "#A2A9B8", marginTop: 3 }}>
-            {isCustom ? "재고에 아직 없는 새 품목이면 이름을 직접 입력하세요." : "이미 등록된 품목의 추가 입고라면 검색해서 선택하세요."}
-          </div>
-        </Field>
+    <Modal title="입고예정 등록" onClose={onClose} width={560}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <div style={{ flex: 1 }}>
-            <Field label="수량" required>
-              <TextInput type="number" min={1} value={qty} onChange={(e) => setQty(e.target.value)} style={{ width: "100%", boxSizing: "border-box" }} />
+          <div style={{ flex: 1, minWidth: 180 }}>
+            <Field label="프로젝트 (선택)">
+              <Select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+                <option value="">프로젝트 없음 (창고 입고)</option>
+                {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </Select>
             </Field>
           </div>
-          {isCustom && (
-            <div style={{ flex: 1 }}>
-              <Field label="단위">
-                <TextInput value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="EA" style={{ width: "100%", boxSizing: "border-box" }} />
-              </Field>
-            </div>
-          )}
+          <div style={{ flex: 1, minWidth: 160 }}>
+            <Field label="예상 입고일 (공통 적용)">
+              <TextInput type="date" value={expectedDate} onChange={(e) => setExpectedDate(e.target.value)} style={{ width: "100%", boxSizing: "border-box" }} />
+            </Field>
+          </div>
         </div>
-        <Field label="예상 입고일">
-          <TextInput type="date" value={expectedDate} onChange={(e) => setExpectedDate(e.target.value)} style={{ width: 200 }} />
-          <div style={{ fontSize: 11, color: "#A2A9B8", marginTop: 3 }}>비워두면 나중에 입고예정 목록에서 날짜를 지정할 수 있습니다.</div>
-        </Field>
+        <div style={{ fontSize: 11, color: "#A2A9B8", marginTop: -8 }}>
+          같은 날 들어오는 품목이 여러 개면 아래에서 품목을 추가해서 한 번에 등록하세요. 날짜는 비워두면 나중에 지정할 수 있습니다.
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {rows.map((r, idx) => (
+            <div key={r.id} style={{ border: "1px solid #EEF0F3", borderRadius: 8, padding: "10px 12px", background: "#FAFBFC" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: "#8A93A6" }}>품목 {idx + 1}</span>
+                {rows.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => removeRow(r.id)}
+                    title="이 품목 제거"
+                    style={{ border: "none", background: "none", cursor: "pointer", color: "#E63946", padding: 2, display: "flex" }}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                {r.isCustom ? (
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <TextInput
+                      value={r.customName}
+                      onChange={(e) => updateRow(r.id, { customName: e.target.value })}
+                      placeholder="새로 들어오는 품목명 (예: 산업용 센서 A)"
+                      style={{ flex: 1 }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => updateRow(r.id, { isCustom: false, customName: "" })}
+                      title="이미 등록된 품목에서 선택"
+                      style={{ border: "1px solid #DADFE6", background: "#fff", borderRadius: 6, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#8A93A6", flexShrink: 0 }}
+                    >
+                      <Search size={13} />
+                    </button>
+                  </div>
+                ) : (
+                  <ItemPicker items={items} value={r.itemId} onSelect={(id) => updateRow(r.id, { itemId: id })} onCustom={() => updateRow(r.id, { isCustom: true, itemId: "" })} placeholder="기존 품목명 검색" />
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 100 }}>
+                  <TextInput type="number" min={1} value={r.qty} onChange={(e) => updateRow(r.id, { qty: e.target.value })} placeholder="수량" style={{ width: "100%", boxSizing: "border-box" }} />
+                </div>
+                {r.isCustom && (
+                  <div style={{ flex: 1, minWidth: 100 }}>
+                    <TextInput value={r.unit} onChange={(e) => updateRow(r.id, { unit: e.target.value })} placeholder="단위 (EA)" style={{ width: "100%", boxSizing: "border-box" }} />
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <GhostButton onClick={addRow} style={{ alignSelf: "flex-start", padding: "7px 12px", fontSize: 12.5 }}>
+          <Plus size={14} /> 품목 추가
+        </GhostButton>
+
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
           <GhostButton onClick={onClose}>취소</GhostButton>
-          <PrimaryButton onClick={submit}>등록</PrimaryButton>
+          <PrimaryButton onClick={submit}>{rows.length > 1 ? `${rows.length}개 품목 등록` : "등록"}</PrimaryButton>
         </div>
       </div>
     </Modal>
@@ -1065,20 +1104,30 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
     setNotice(`예상 입고일 ${list.length}건이 일괄 반영되었습니다.`);
   }
 
-  async function createIncomingRequest(payload) {
+  async function createIncomingRequest(payloads) {
+    const list = Array.isArray(payloads) ? payloads : [payloads];
+    if (list.length === 0) return;
     if (isMember) {
-      const created = await insertPending({
-        entity: "incoming", action: "create", targetId: null, payload,
-        summary: `입고예정 '${payload.name}' 등록 요청 (${payload.qty}${payload.unit || ""}${payload.expectedDate ? `, ${payload.expectedDate}` : ""})`,
-        requestedBy: username,
-      });
-      setPending([created, ...pending]);
-      setNotice("입고예정 등록 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
+      const newPending = [];
+      for (const payload of list) {
+        const created = await insertPending({
+          entity: "incoming", action: "create", targetId: null, payload,
+          summary: `입고예정 '${payload.name}' 등록 요청 (${payload.qty}${payload.unit || ""}${payload.expectedDate ? `, ${payload.expectedDate}` : ""})`,
+          requestedBy: username,
+        });
+        newPending.push(created);
+      }
+      setPending([...newPending, ...pending]);
+      setNotice(list.length > 1 ? `입고예정 등록 요청 ${list.length}건이 접수되었습니다. 관리자 승인 후 반영됩니다.` : "입고예정 등록 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
       setShowIncomingForm(false);
       return;
     }
-    const created = await insertIncomingRequest(payload);
-    setIncoming([created, ...incoming]);
+    const newIncoming = [];
+    for (const payload of list) {
+      const created = await insertIncomingRequest(payload);
+      newIncoming.push(created);
+    }
+    setIncoming([...newIncoming, ...incoming]);
     setShowIncomingForm(false);
   }
 
@@ -1989,7 +2038,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
 
       {showItemForm && <ItemFormModal onSave={saveItem} onClose={() => setShowItemForm(false)} />}
       {editItem && <ItemFormModal initial={editItem} onSave={saveItem} onClose={() => setEditItem(null)} />}
-      {showIncomingForm && <IncomingRequestFormModal items={items} onSave={createIncomingRequest} onClose={() => setShowIncomingForm(false)} />}
+      {showIncomingForm && <IncomingRequestFormModal items={items} projects={projects} onSave={createIncomingRequest} onClose={() => setShowIncomingForm(false)} />}
       {txModal && (
         <TxFormModal
           item={txModal.item}
