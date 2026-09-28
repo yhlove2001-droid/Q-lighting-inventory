@@ -1545,6 +1545,20 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                                 onChange={(e) => setExpectedDate(req, e.target.value)}
                                 style={{ width: 132, fontSize: 12, padding: "5px 7px" }}
                               />
+                              {req.expectedDate && (() => {
+                                const d = daysUntil(req.expectedDate);
+                                const overdue = d < 0;
+                                const soon = d >= 0 && d <= 3;
+                                return (
+                                  <span style={{
+                                    padding: "1px 6px", borderRadius: 999, fontSize: 10, fontWeight: 700, whiteSpace: "nowrap",
+                                    background: overdue ? "#FCEBEC" : soon ? "#FFF3E6" : "#EAF1FE",
+                                    color: overdue ? "#E63946" : soon ? "#FB8500" : "#3B82F6",
+                                  }}>
+                                    {overdue ? `D+${-d}` : d === 0 ? "D-DAY" : `D-${d}`}
+                                  </span>
+                                );
+                              })()}
                               <span style={{ fontSize: 10.5, color: "#6B7280", fontWeight: 600, marginLeft: 3 }}>수량</span>
                               <TextInput
                                 key={`${req.id}-${req.qty}`}
@@ -1680,6 +1694,20 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                             onChange={(e) => quickUpdateFutureTx(tx, { date: e.target.value })}
                             style={{ width: 132, fontSize: 12, padding: "5px 7px" }}
                           />
+                          {tx.date && (() => {
+                            const d = daysUntil(tx.date);
+                            const overdue = d < 0;
+                            const soon = d >= 0 && d <= 3;
+                            return (
+                              <span style={{
+                                padding: "1px 6px", borderRadius: 999, fontSize: 10, fontWeight: 700, whiteSpace: "nowrap",
+                                background: overdue ? "#FCEBEC" : soon ? "#FFF3E6" : "#EAF1FE",
+                                color: overdue ? "#E63946" : soon ? "#FB8500" : "#3B82F6",
+                              }}>
+                                {overdue ? `D+${-d}` : d === 0 ? "D-DAY" : `D-${d}`}
+                              </span>
+                            );
+                          })()}
                           <span style={{ fontSize: 10.5, color: "#6B7280", fontWeight: 600, marginLeft: 3 }}>수량</span>
                           <TextInput
                             key={`${tx.id}-${tx.qty}`}
