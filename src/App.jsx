@@ -980,6 +980,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
   const [txModal, setTxModal] = useState(null); // { item, tx, defaultType }
   const [adjustModal, setAdjustModal] = useState(null); // { item, currentStock }
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteIncomingTarget, setDeleteIncomingTarget] = useState(null);
   const [expandedItem, setExpandedItem] = useState(null);
   const [notice, setNotice] = useState("");
   const [incomingChoice, setIncomingChoice] = useState({});
@@ -1095,6 +1096,23 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
     }
     const updated = await updateIncomingRequest(req.id, { qty: n });
     setIncoming(incoming.map((r) => (r.id === req.id ? updated : r)));
+  }
+
+  async function deleteIncoming(req) {
+    if (isMember) {
+      const created = await insertPending({
+        entity: "incoming", action: "delete", targetId: req.id, payload: null,
+        summary: `입고예정 '${req.name}' 삭제 요청`,
+        requestedBy: username,
+      });
+      setPending([created, ...pending]);
+      setNotice("입고예정 삭제 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
+      setDeleteIncomingTarget(null);
+      return;
+    }
+    await deleteIncomingRequestRow(req.id);
+    setIncoming(incoming.filter((r) => r.id !== req.id));
+    setDeleteIncomingTarget(null);
   }
 
   async function confirmIncoming(req) {
@@ -1362,6 +1380,239 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
           <button onClick={() => setNotice("")} style={{ border: "none", background: "none", cursor: "pointer", color: "#2554A8" }}><X size={14} /></button>
         </div>
       )}
+
+      {(() => {
+        const pendingIncoming = incoming.filter((r) => r.status === "pending");
+        if (pendingIncoming.length === 0) return null;
+
+        // 프로젝트별로 묶기
+        const groupMap = {};
+        for (const req of pendingIncoming) {
+          const key = req.projectId || "__none__";
+          if (!groupMap[key]) groupMap[key] = [];
+          groupMap[key].push(req);
+        }
+        const incomingGroups = Object.keys(groupMap).map((key) => ({
+          key,
+          label: key === "__none__" ? "프로젝트 없음" : (projectNameFor(key) || "삭제된 프로젝트"),
+          list: groupMap[key],
+        }));
+
+        function setGroupAll(list, warehouseQty) {
+          setIncomingChoice((prev) => {
+            const next = { ...prev };
+            for (const req of list) {
+              next[req.id] = { ...next[req.id], warehouseQty };
+            }
+            return next;
+          });
+        }
+
+        return (
+          <div style={{ marginBottom: 20, background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: "16px 18px" }}>
+            <datalist id="location-options-incoming">
+              {LOCATION_OPTIONS.map((opt) => <option key={opt} value={opt} />)}
+            </datalist>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+              <div style={{ fontWeight: 800, fontSize: 15, color: "#14213D" }}>
+                입고예정 ({pendingIncoming.length}건) — 한눈에 보기
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <GhostButton onClick={() => setExpandedIncomingGroups(new Set(incomingGroups.map((g) => g.key)))} style={{ padding: "6px 10px", fontSize: 12 }}>
+                  전체 펼치기
+                </GhostButton>
+                <GhostButton onClick={() => { setExpandedIncomingGroups(new Set()); setExpandedIncomingItems(new Set()); }} style={{ padding: "6px 10px", fontSize: 12 }}>
+                  전체 접기
+                </GhostButton>
+              </div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {incomingGroups.map((group) => {
+                const isGroupOpen = expandedIncomingGroups.has(group.key);
+                return (
+                <div key={group.key} style={{ background: "#F7F8FA", border: "1px solid #EEF0F3", borderRadius: 10, overflow: "hidden" }}>
+                  <div
+                    onClick={() => toggleIncomingGroup(group.key)}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, padding: "10px 14px", cursor: "pointer" }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <ChevronRight size={15} style={{ color: "#A2A9B8", transform: isGroupOpen ? "rotate(90deg)" : "none", transition: "transform .15s", flexShrink: 0 }} />
+                      <span style={{ fontWeight: 700, fontSize: 13, color: "#0EA5E9" }}>{group.label}</span>
+                      <span style={{ fontSize: 11.5, color: "#A2A9B8" }}>{group.list.length}건</span>
+                    </div>
+                    {isGroupOpen && (
+                      <div className="no-print" onClick={(e) => e.stopPropagation()} style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                        <TextInput
+                          type="date"
+                          value={groupDateInputs[group.key] || ""}
+                          onChange={(e) => setGroupDateInputs((prev) => ({ ...prev, [group.key]: e.target.value }))}
+                          style={{ width: 150 }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => applyGroupDate(group.list, groupDateInputs[group.key])}
+                          disabled={!groupDateInputs[group.key]}
+                          style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#6B7280", opacity: groupDateInputs[group.key] ? 1 : 0.5 }}
+                        >
+                          날짜 일괄 적용
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setGroupAll(group.list, undefined)}
+                          style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#2A9D8F" }}
+                        >
+                          이 프로젝트 전체 창고로
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setGroupAll(group.list, 0)}
+                          style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#3B82F6" }}
+                        >
+                          이 프로젝트 전체 현장으로
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {isGroupOpen && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "0 14px 14px" }}>
+                    {group.list.map((req) => {
+                      const isItemOpen = expandedIncomingItems.has(req.id);
+                      const choice = incomingChoice[req.id] || {};
+                      const isPendingRequest = pending.some((p) => p.entity === "incoming" && p.targetId === req.id);
+                      const whQty = choice.warehouseQty !== undefined && choice.warehouseQty !== "" ? Number(choice.warehouseQty) : req.qty;
+                      const validWhQty = !Number.isNaN(whQty) && whQty >= 0 && whQty <= req.qty;
+                      const projQty = validWhQty ? req.qty - whQty : null;
+                      return (
+                        <div key={req.id} style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: "10px 14px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                              <span style={{ fontWeight: 700, fontSize: 14, color: "#14213D" }}>{req.name}</span>
+                              {req.itemId && (
+                                <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>
+                                  기존 재고 품목 (예비 발주)
+                                </span>
+                              )}
+                              {isPendingRequest && (
+                                <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>
+                                  승인대기
+                                </span>
+                              )}
+                            </div>
+                            <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                              <span style={{ fontSize: 11.5, color: "#6B7280", fontWeight: 600 }}>입고일</span>
+                              <TextInput
+                                type="date"
+                                value={req.expectedDate || ""}
+                                onChange={(e) => setExpectedDate(req, e.target.value)}
+                                style={{ width: 148 }}
+                              />
+                              <span style={{ fontSize: 11.5, color: "#6B7280", fontWeight: 600, marginLeft: 4 }}>수량</span>
+                              <TextInput
+                                key={`${req.id}-${req.qty}`}
+                                type="number"
+                                min={1}
+                                defaultValue={req.qty}
+                                onBlur={(e) => setIncomingQty(req, e.target.value)}
+                                style={{ width: 76 }}
+                              />
+                              <span style={{ fontSize: 12, color: "#8A93A6" }}>{req.unit || ""}</span>
+                              <button
+                                type="button"
+                                onClick={() => toggleIncomingItem(req.id)}
+                                title="창고/현장 분할 및 입고 확정"
+                                style={{ border: "1px solid #DADFE6", background: isItemOpen ? "#14213D" : "#fff", borderRadius: 6, width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: isItemOpen ? "#fff" : "#6B7280", flexShrink: 0 }}
+                              >
+                                <ChevronRight size={14} style={{ transform: isItemOpen ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setDeleteIncomingTarget(req)}
+                                title="입고예정 삭제"
+                                style={{ border: "1px solid #F6C9CE", background: "#fff", borderRadius: 6, width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#E63946", flexShrink: 0 }}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </div>
+                          {isItemOpen && (
+                          <div style={{ marginTop: 10 }}>
+                          <div style={{ fontSize: 11.5, color: "#A2A9B8", marginBottom: 8 }}>
+                            전체 수량 중 일부만 창고로 입고하고 나머지는 현장(프로젝트)으로 바로 보낼 수 있습니다.
+                          </div>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+                            <button
+                              type="button"
+                              onClick={() => setChoice(req.id, { warehouseQty: req.qty })}
+                              style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#2A9D8F" }}
+                            >
+                              전체 창고로
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setChoice(req.id, { warehouseQty: 0 })}
+                              style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#3B82F6" }}
+                            >
+                              전체 현장으로
+                            </button>
+                          </div>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <span style={{ fontSize: 12.5, color: "#2A9D8F", fontWeight: 700 }}>창고로</span>
+                              <TextInput
+                                type="number" min={0} max={req.qty}
+                                value={choice.warehouseQty !== undefined ? choice.warehouseQty : req.qty}
+                                onChange={(e) => setChoice(req.id, { warehouseQty: e.target.value })}
+                                style={{ width: 70 }}
+                              />
+                              <span style={{ fontSize: 12, color: "#8A93A6" }}>{req.unit || ""}</span>
+                            </div>
+                            <span style={{ fontSize: 12.5, color: "#8A93A6" }}>/</span>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <span style={{ fontSize: 12.5, color: "#3B82F6", fontWeight: 700 }}>현장 직접 전달</span>
+                              <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: "#14213D" }}>
+                                {validWhQty ? projQty : "-"}{req.unit || ""}
+                              </span>
+                            </div>
+                            {validWhQty && whQty > 0 && !req.itemId && (
+                              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                                <TextInput
+                                  value={choice.location || ""}
+                                  onChange={(e) => setChoice(req.id, { location: e.target.value })}
+                                  placeholder="창고 위치 (예: A-1, 비워두면 위치 미분류)"
+                                  list="location-options-incoming"
+                                  style={{ width: 200 }}
+                                />
+                                {!choice.location && (
+                                  <span style={{ fontSize: 10.5, color: "#FB8500" }}>위치를 비워두면 "위치 미분류"로 등록되며, 나중에 재고관리에서 위치를 지정할 수 있습니다.</span>
+                                )}
+                              </div>
+                            )}
+                            {validWhQty && whQty > 0 && req.itemId && (
+                              <span style={{ fontSize: 11.5, color: "#8A93A6" }}>기존 재고 품목에 바로 추가됩니다</span>
+                            )}
+                            <PrimaryButton
+                              onClick={() => confirmIncoming(req)}
+                              disabled={!validWhQty || isPendingRequest}
+                              style={{ opacity: !validWhQty || isPendingRequest ? 0.5 : 1 }}
+                            >
+                              {isMember ? "처리 요청" : "확정"}
+                            </PrimaryButton>
+                          </div>
+                          </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  )}
+                </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 12, flexWrap: "wrap" }}>
         <div style={{ position: "relative", flex: "1 1 240px", maxWidth: 320 }}>
           <Search size={15} color="#A2A9B8" style={{ position: "absolute", left: 11, top: 11 }} />
@@ -1610,230 +1861,6 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
         </div>
       </div>
 
-      {(() => {
-        const pendingIncoming = incoming.filter((r) => r.status === "pending");
-        if (pendingIncoming.length === 0) return null;
-
-        // 프로젝트별로 묶기
-        const groupMap = {};
-        for (const req of pendingIncoming) {
-          const key = req.projectId || "__none__";
-          if (!groupMap[key]) groupMap[key] = [];
-          groupMap[key].push(req);
-        }
-        const incomingGroups = Object.keys(groupMap).map((key) => ({
-          key,
-          label: key === "__none__" ? "프로젝트 없음" : (projectNameFor(key) || "삭제된 프로젝트"),
-          list: groupMap[key],
-        }));
-
-        function setGroupAll(list, warehouseQty) {
-          setIncomingChoice((prev) => {
-            const next = { ...prev };
-            for (const req of list) {
-              next[req.id] = { ...next[req.id], warehouseQty };
-            }
-            return next;
-          });
-        }
-
-        return (
-          <div style={{ marginTop: 24 }}>
-            <datalist id="location-options-incoming">
-              {LOCATION_OPTIONS.map((opt) => <option key={opt} value={opt} />)}
-            </datalist>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-              <div style={{ fontWeight: 800, fontSize: 15, color: "#14213D" }}>
-                입고예정 ({pendingIncoming.length}건)
-              </div>
-              <div style={{ display: "flex", gap: 6 }}>
-                <GhostButton onClick={() => setExpandedIncomingGroups(new Set(incomingGroups.map((g) => g.key)))} style={{ padding: "6px 10px", fontSize: 12 }}>
-                  전체 펼치기
-                </GhostButton>
-                <GhostButton onClick={() => { setExpandedIncomingGroups(new Set()); setExpandedIncomingItems(new Set()); }} style={{ padding: "6px 10px", fontSize: 12 }}>
-                  전체 접기
-                </GhostButton>
-              </div>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {incomingGroups.map((group) => {
-                const isGroupOpen = expandedIncomingGroups.has(group.key);
-                return (
-                <div key={group.key} style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, overflow: "hidden" }}>
-                  <div
-                    onClick={() => toggleIncomingGroup(group.key)}
-                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, padding: "12px 14px", cursor: "pointer", background: "#F7F8FA" }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <ChevronRight size={15} style={{ color: "#A2A9B8", transform: isGroupOpen ? "rotate(90deg)" : "none", transition: "transform .15s", flexShrink: 0 }} />
-                      <span style={{ fontWeight: 700, fontSize: 13, color: "#0EA5E9" }}>{group.label}</span>
-                      <span style={{ fontSize: 11.5, color: "#A2A9B8" }}>{group.list.length}건</span>
-                    </div>
-                    {isGroupOpen && (
-                      <div className="no-print" onClick={(e) => e.stopPropagation()} style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                        <TextInput
-                          type="date"
-                          value={groupDateInputs[group.key] || ""}
-                          onChange={(e) => setGroupDateInputs((prev) => ({ ...prev, [group.key]: e.target.value }))}
-                          style={{ width: 150 }}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => applyGroupDate(group.list, groupDateInputs[group.key])}
-                          disabled={!groupDateInputs[group.key]}
-                          style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#6B7280", opacity: groupDateInputs[group.key] ? 1 : 0.5 }}
-                        >
-                          날짜 일괄 적용
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setGroupAll(group.list, undefined)}
-                          style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#2A9D8F" }}
-                        >
-                          이 프로젝트 전체 창고로
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setGroupAll(group.list, 0)}
-                          style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#3B82F6" }}
-                        >
-                          이 프로젝트 전체 현장으로
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  {isGroupOpen && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 14px 14px" }}>
-                    {group.list.map((req) => {
-                      const isItemOpen = expandedIncomingItems.has(req.id);
-                      const choice = incomingChoice[req.id] || {};
-                      const isPendingRequest = pending.some((p) => p.entity === "incoming" && p.targetId === req.id);
-                      const whQty = choice.warehouseQty !== undefined && choice.warehouseQty !== "" ? Number(choice.warehouseQty) : req.qty;
-                      const validWhQty = !Number.isNaN(whQty) && whQty >= 0 && whQty <= req.qty;
-                      const projQty = validWhQty ? req.qty - whQty : null;
-                      return (
-                        <div key={req.id} style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: isItemOpen ? "14px 16px" : "10px 16px" }}>
-                          <div
-                            onClick={() => toggleIncomingItem(req.id)}
-                            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: isItemOpen ? 10 : 0, cursor: "pointer" }}
-                          >
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                              <ChevronRight size={13} style={{ color: "#C4CBD4", transform: isItemOpen ? "rotate(90deg)" : "none", transition: "transform .15s", flexShrink: 0 }} />
-                              <span style={{ fontWeight: 700, fontSize: 14, color: "#14213D" }}>{req.name}</span>
-                              <span style={{ marginLeft: 4, fontFamily: "ui-monospace, monospace", color: "#8A93A6", fontSize: 12.5 }}>총 수량 {req.qty}{req.unit ? ` ${req.unit}` : ""}</span>
-                              {req.itemId && (
-                                <span style={{ marginLeft: 4, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>
-                                  기존 재고 품목 (예비 발주)
-                                </span>
-                              )}
-                              {isPendingRequest && (
-                                <span style={{ marginLeft: 4, padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>
-                                  승인대기
-                                </span>
-                              )}
-                              {req.expectedDate && (
-                                <span style={{ marginLeft: 4, fontSize: 11, color: "#3B82F6" }}>입고예정일 {req.expectedDate}</span>
-                              )}
-                            </div>
-                          </div>
-                          {isItemOpen && (
-                          <>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-                            <span style={{ fontSize: 12.5, color: "#6B7280", fontWeight: 600 }}>예상 입고일</span>
-                            <TextInput
-                              type="date"
-                              value={req.expectedDate || ""}
-                              onChange={(e) => setExpectedDate(req, e.target.value)}
-                              style={{ width: 160 }}
-                            />
-                            <span style={{ fontSize: 12.5, color: "#6B7280", fontWeight: 600, marginLeft: 8 }}>총 수량</span>
-                            <TextInput
-                              key={`${req.id}-${req.qty}`}
-                              type="number"
-                              min={1}
-                              defaultValue={req.qty}
-                              onBlur={(e) => setIncomingQty(req, e.target.value)}
-                              style={{ width: 90 }}
-                            />
-                            <span style={{ fontSize: 12, color: "#8A93A6" }}>{req.unit || ""}</span>
-                          </div>
-                          <div style={{ fontSize: 11.5, color: "#A2A9B8", marginBottom: 8 }}>
-                            전체 수량 중 일부만 창고로 입고하고 나머지는 현장(프로젝트)으로 바로 보낼 수 있습니다.
-                          </div>
-                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
-                            <button
-                              type="button"
-                              onClick={() => setChoice(req.id, { warehouseQty: req.qty })}
-                              style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#2A9D8F" }}
-                            >
-                              전체 창고로
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setChoice(req.id, { warehouseQty: 0 })}
-                              style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #DADFE6", background: "#fff", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#3B82F6" }}
-                            >
-                              전체 현장으로
-                            </button>
-                          </div>
-                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                              <span style={{ fontSize: 12.5, color: "#2A9D8F", fontWeight: 700 }}>창고로</span>
-                              <TextInput
-                                type="number" min={0} max={req.qty}
-                                value={choice.warehouseQty !== undefined ? choice.warehouseQty : req.qty}
-                                onChange={(e) => setChoice(req.id, { warehouseQty: e.target.value })}
-                                style={{ width: 70 }}
-                              />
-                              <span style={{ fontSize: 12, color: "#8A93A6" }}>{req.unit || ""}</span>
-                            </div>
-                            <span style={{ fontSize: 12.5, color: "#8A93A6" }}>/</span>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                              <span style={{ fontSize: 12.5, color: "#3B82F6", fontWeight: 700 }}>현장 직접 전달</span>
-                              <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: "#14213D" }}>
-                                {validWhQty ? projQty : "-"}{req.unit || ""}
-                              </span>
-                            </div>
-                            {validWhQty && whQty > 0 && !req.itemId && (
-                              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                                <TextInput
-                                  value={choice.location || ""}
-                                  onChange={(e) => setChoice(req.id, { location: e.target.value })}
-                                  placeholder="창고 위치 (예: A-1, 비워두면 위치 미분류)"
-                                  list="location-options-incoming"
-                                  style={{ width: 200 }}
-                                />
-                                {!choice.location && (
-                                  <span style={{ fontSize: 10.5, color: "#FB8500" }}>위치를 비워두면 "위치 미분류"로 등록되며, 나중에 재고관리에서 위치를 지정할 수 있습니다.</span>
-                                )}
-                              </div>
-                            )}
-                            {validWhQty && whQty > 0 && req.itemId && (
-                              <span style={{ fontSize: 11.5, color: "#8A93A6" }}>기존 재고 품목에 바로 추가됩니다</span>
-                            )}
-                            <PrimaryButton
-                              onClick={() => confirmIncoming(req)}
-                              disabled={!validWhQty || isPendingRequest}
-                              style={{ opacity: !validWhQty || isPendingRequest ? 0.5 : 1 }}
-                            >
-                              {isMember ? "처리 요청" : "확정"}
-                            </PrimaryButton>
-                          </div>
-                          </>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  )}
-                </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })()}
-
       {showItemForm && <ItemFormModal onSave={saveItem} onClose={() => setShowItemForm(false)} />}
       {editItem && <ItemFormModal initial={editItem} onSave={saveItem} onClose={() => setEditItem(null)} />}
       {showIncomingForm && <IncomingRequestFormModal items={items} onSave={createIncomingRequest} onClose={() => setShowIncomingForm(false)} />}
@@ -1864,6 +1891,15 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
             : `'${deleteTarget.name}' 품목과 관련 입출고 기록을 모두 삭제하시겠습니까?`}
           onConfirm={() => deleteItem(deleteTarget.id)}
           onClose={() => setDeleteTarget(null)}
+        />
+      )}
+      {deleteIncomingTarget && (
+        <ConfirmDialog
+          text={isMember
+            ? `입고예정 '${deleteIncomingTarget.name}' 삭제를 관리자에게 요청하시겠습니까?`
+            : `입고예정 '${deleteIncomingTarget.name}'을(를) 삭제하시겠습니까?`}
+          onConfirm={() => deleteIncoming(deleteIncomingTarget)}
+          onClose={() => setDeleteIncomingTarget(null)}
         />
       )}
     </div>
@@ -3992,6 +4028,10 @@ function AdminTab({
       if (p.action === "create") {
         const created = await insertIncomingRequest(p.payload);
         setIncoming([created, ...incoming]);
+      }
+      if (p.action === "delete") {
+        await deleteIncomingRequestRow(p.targetId);
+        setIncoming(incoming.filter((r) => r.id !== p.targetId));
       }
     } else if (p.entity === "staff") {
       if (p.action === "create") {
