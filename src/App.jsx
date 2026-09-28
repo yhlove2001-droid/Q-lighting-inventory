@@ -591,6 +591,91 @@ function ItemFormModal({ initial, onSave, onClose }) {
   );
 }
 
+// ---------- 입고예정 등록 폼 ----------
+function IncomingRequestFormModal({ items, onSave, onClose }) {
+  const [isCustom, setIsCustom] = useState(true);
+  const [itemId, setItemId] = useState("");
+  const [customName, setCustomName] = useState("");
+  const [qty, setQty] = useState(1);
+  const [unit, setUnit] = useState("EA");
+  const [expectedDate, setExpectedDate] = useState("");
+
+  const selectedItem = items.find((i) => i.id === itemId);
+
+  function submit() {
+    const name = isCustom ? customName.trim() : (selectedItem?.name || "");
+    if (!name) return;
+    if (!qty || Number(qty) <= 0) return;
+    onSave({
+      projectId: null,
+      itemId: isCustom ? null : (itemId || null),
+      name,
+      qty: Number(qty),
+      unit: (isCustom ? unit : (selectedItem?.unit || unit || "EA")).trim() || "EA",
+      expectedDate: expectedDate || null,
+    });
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === "Enter" && e.target.tagName !== "TEXTAREA") submit();
+  }
+
+  return (
+    <Modal title="입고예정 등록" onClose={onClose}>
+      <div onKeyDown={handleKeyDown} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <Field label="품목" required>
+          {isCustom ? (
+            <div style={{ display: "flex", gap: 6 }}>
+              <TextInput
+                value={customName}
+                onChange={(e) => setCustomName(e.target.value)}
+                placeholder="새로 들어오는 품목명 (예: 산업용 센서 A)"
+                autoFocus
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                onClick={() => { setIsCustom(false); setCustomName(""); }}
+                title="이미 등록된 품목에서 선택"
+                style={{ border: "1px solid #DADFE6", background: "#fff", borderRadius: 6, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#8A93A6", flexShrink: 0 }}
+              >
+                <Search size={13} />
+              </button>
+            </div>
+          ) : (
+            <ItemPicker items={items} value={itemId} onSelect={(id) => setItemId(id)} onCustom={() => { setIsCustom(true); setItemId(""); }} placeholder="기존 품목명 검색" />
+          )}
+          <div style={{ fontSize: 11, color: "#A2A9B8", marginTop: 3 }}>
+            {isCustom ? "재고에 아직 없는 새 품목이면 이름을 직접 입력하세요." : "이미 등록된 품목의 추가 입고라면 검색해서 선택하세요."}
+          </div>
+        </Field>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: 1 }}>
+            <Field label="수량" required>
+              <TextInput type="number" min={1} value={qty} onChange={(e) => setQty(e.target.value)} style={{ width: "100%", boxSizing: "border-box" }} />
+            </Field>
+          </div>
+          {isCustom && (
+            <div style={{ flex: 1 }}>
+              <Field label="단위">
+                <TextInput value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="EA" style={{ width: "100%", boxSizing: "border-box" }} />
+              </Field>
+            </div>
+          )}
+        </div>
+        <Field label="예상 입고일">
+          <TextInput type="date" value={expectedDate} onChange={(e) => setExpectedDate(e.target.value)} style={{ width: 200 }} />
+          <div style={{ fontSize: 11, color: "#A2A9B8", marginTop: 3 }}>비워두면 나중에 입고예정 목록에서 날짜를 지정할 수 있습니다.</div>
+        </Field>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+          <GhostButton onClick={onClose}>취소</GhostButton>
+          <PrimaryButton onClick={submit}>등록</PrimaryButton>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ---------- Transaction (입출고) form modal ----------
 function TxFormModal({ item, defaultType, vendors, projects = [], initial, onSave, onDelete, onClose }) {
   const [type, setType] = useState(initial?.type || defaultType || "in");
@@ -890,6 +975,7 @@ function ConfirmDialog({ text, onConfirm, onClose, confirmLabel = "삭제", canc
 function InventoryTab({ items, setItems, transactions, setTransactions, vendors, projects, incoming = [], setIncoming, role, username, pending, setPending }) {
   const [search, setSearch] = useState("");
   const [showItemForm, setShowItemForm] = useState(false);
+  const [showIncomingForm, setShowIncomingForm] = useState(false);
   const [editItem, setEditItem] = useState(null);
   const [txModal, setTxModal] = useState(null); // { item, tx, defaultType }
   const [adjustModal, setAdjustModal] = useState(null); // { item, currentStock }
@@ -974,6 +1060,41 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
     }
     setIncoming(incoming.map((r) => updates.find((u) => u.id === r.id) || r));
     setNotice(`예상 입고일 ${list.length}건이 일괄 반영되었습니다.`);
+  }
+
+  async function createIncomingRequest(payload) {
+    if (isMember) {
+      const created = await insertPending({
+        entity: "incoming", action: "create", targetId: null, payload,
+        summary: `입고예정 '${payload.name}' 등록 요청 (${payload.qty}${payload.unit || ""}${payload.expectedDate ? `, ${payload.expectedDate}` : ""})`,
+        requestedBy: username,
+      });
+      setPending([created, ...pending]);
+      setNotice("입고예정 등록 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
+      setShowIncomingForm(false);
+      return;
+    }
+    const created = await insertIncomingRequest(payload);
+    setIncoming([created, ...incoming]);
+    setShowIncomingForm(false);
+  }
+
+  async function setIncomingQty(req, qty) {
+    const n = Number(qty);
+    if (!qty || Number.isNaN(n) || n <= 0 || n === req.qty) return;
+    if (isMember) {
+      const created = await insertPending({
+        entity: "incoming", action: "edit", targetId: req.id,
+        payload: { qty: n },
+        summary: `입고예정 '${req.name}' 수량 변경 요청 (${req.qty}${req.unit || ""} → ${n}${req.unit || ""})`,
+        requestedBy: username,
+      });
+      setPending([created, ...pending]);
+      setNotice("수량 변경 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
+      return;
+    }
+    const updated = await updateIncomingRequest(req.id, { qty: n });
+    setIncoming(incoming.map((r) => (r.id === req.id ? updated : r)));
   }
 
   async function confirmIncoming(req) {
@@ -1266,6 +1387,9 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
         <PrimaryButton onClick={() => setShowItemForm(true)}>
           <Plus size={16} /> 새 품목 추가
         </PrimaryButton>
+        <GhostButton onClick={() => setShowIncomingForm(true)} style={{ padding: "9px 12px", fontSize: 12.5, borderColor: "#3B82F6", color: "#3B82F6" }}>
+          <Plus size={15} /> 입고예정 등록
+        </GhostButton>
         <GhostButton onClick={exportInventory}>
           <FileDown size={15} /> 엑셀로 저장
         </GhostButton>
@@ -1614,7 +1738,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                           </div>
                           {isItemOpen && (
                           <>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
                             <span style={{ fontSize: 12.5, color: "#6B7280", fontWeight: 600 }}>예상 입고일</span>
                             <TextInput
                               type="date"
@@ -1622,6 +1746,16 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                               onChange={(e) => setExpectedDate(req, e.target.value)}
                               style={{ width: 160 }}
                             />
+                            <span style={{ fontSize: 12.5, color: "#6B7280", fontWeight: 600, marginLeft: 8 }}>총 수량</span>
+                            <TextInput
+                              key={`${req.id}-${req.qty}`}
+                              type="number"
+                              min={1}
+                              defaultValue={req.qty}
+                              onBlur={(e) => setIncomingQty(req, e.target.value)}
+                              style={{ width: 90 }}
+                            />
+                            <span style={{ fontSize: 12, color: "#8A93A6" }}>{req.unit || ""}</span>
                           </div>
                           <div style={{ fontSize: 11.5, color: "#A2A9B8", marginBottom: 8 }}>
                             전체 수량 중 일부만 창고로 입고하고 나머지는 현장(프로젝트)으로 바로 보낼 수 있습니다.
@@ -1702,6 +1836,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
 
       {showItemForm && <ItemFormModal onSave={saveItem} onClose={() => setShowItemForm(false)} />}
       {editItem && <ItemFormModal initial={editItem} onSave={saveItem} onClose={() => setEditItem(null)} />}
+      {showIncomingForm && <IncomingRequestFormModal items={items} onSave={createIncomingRequest} onClose={() => setShowIncomingForm(false)} />}
       {txModal && (
         <TxFormModal
           item={txModal.item}
@@ -3853,6 +3988,10 @@ function AdminTab({
       if (p.action === "edit") {
         const updatedReq = await updateIncomingRequest(p.targetId, p.payload);
         setIncoming(incoming.map((r) => (r.id === p.targetId ? updatedReq : r)));
+      }
+      if (p.action === "create") {
+        const created = await insertIncomingRequest(p.payload);
+        setIncoming([created, ...incoming]);
       }
     } else if (p.entity === "staff") {
       if (p.action === "create") {
