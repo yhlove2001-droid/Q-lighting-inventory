@@ -981,6 +981,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
   const [adjustModal, setAdjustModal] = useState(null); // { item, currentStock }
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteIncomingTarget, setDeleteIncomingTarget] = useState(null);
+  const [deleteFutureTxTarget, setDeleteFutureTxTarget] = useState(null);
   const [expandedItem, setExpandedItem] = useState(null);
   const [notice, setNotice] = useState("");
   const [incomingChoice, setIncomingChoice] = useState({});
@@ -1113,6 +1114,40 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
     await deleteIncomingRequestRow(req.id);
     setIncoming(incoming.filter((r) => r.id !== req.id));
     setDeleteIncomingTarget(null);
+  }
+
+  function itemNameFor(id) {
+    return items.find((i) => i.id === id)?.name || "품목";
+  }
+
+  async function quickUpdateFutureTx(tx, patch) {
+    const updatedTx = { ...tx, ...patch };
+    if (isMember) {
+      await queueChange(
+        "transaction", "edit", tx.id, updatedTx,
+        `${itemNameFor(tx.itemId)} 입고예정 수정 요청 (${updatedTx.date}, ${updatedTx.qty}${updatedTx.unit || ""})`
+      );
+      return;
+    }
+    const updated = await updateTransaction(tx.id, updatedTx);
+    setTransactions(transactions.map((t) => (t.id === tx.id ? updated : t)));
+  }
+
+  async function deleteFutureTx(tx) {
+    if (isMember) {
+      const created = await insertPending({
+        entity: "transaction", action: "delete", targetId: tx.id, payload: null,
+        summary: `${itemNameFor(tx.itemId)} 입고예정 삭제 요청 (${tx.date})`,
+        requestedBy: username,
+      });
+      setPending([created, ...pending]);
+      setNotice("입고예정 삭제 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
+      setDeleteFutureTxTarget(null);
+      return;
+    }
+    await deleteTransactionRow(tx.id);
+    setTransactions(transactions.filter((t) => t.id !== tx.id));
+    setDeleteFutureTxTarget(null);
   }
 
   async function confirmIncoming(req) {
@@ -1383,7 +1418,10 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
 
       {(() => {
         const pendingIncoming = incoming.filter((r) => r.status === "pending");
-        if (pendingIncoming.length === 0) return null;
+        const futureTxs = transactions
+          .filter((t) => t.type === "in" && t.date && isFutureDate(t.date))
+          .sort((a, b) => a.date.localeCompare(b.date));
+        if (pendingIncoming.length === 0 && futureTxs.length === 0) return null;
 
         // 프로젝트별로 묶기
         const groupMap = {};
@@ -1415,7 +1453,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
             </datalist>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
               <div style={{ fontWeight: 800, fontSize: 15, color: "#14213D" }}>
-                입고예정 ({pendingIncoming.length}건) — 한눈에 보기
+                입고예정 ({pendingIncoming.length + futureTxs.length}건) — 한눈에 보기
               </div>
               <div style={{ display: "flex", gap: 6 }}>
                 <GhostButton onClick={() => setExpandedIncomingGroups(new Set(incomingGroups.map((g) => g.key)))} style={{ padding: "6px 10px", fontSize: 12 }}>
@@ -1609,6 +1647,58 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                 );
               })}
             </div>
+            {futureTxs.length > 0 && (
+              <div style={{ marginTop: incomingGroups.length > 0 ? 16 : 0 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: "#6B7280", marginBottom: 8 }}>
+                  이미 등록된 품목의 향후 입고 예정 ({futureTxs.length}건)
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {futureTxs.map((tx) => {
+                    const isFuturePendingRequest = pending.some((p) => p.entity === "transaction" && p.targetId === tx.id);
+                    return (
+                      <div key={tx.id} style={{ background: "#F7F8FA", border: "1px solid #EEF0F3", borderRadius: 10, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 700, fontSize: 14, color: "#14213D" }}>{itemNameFor(tx.itemId)}</span>
+                          {isFuturePendingRequest && (
+                            <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>
+                              승인대기
+                            </span>
+                          )}
+                        </div>
+                        <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 11.5, color: "#6B7280", fontWeight: 600 }}>입고일</span>
+                          <TextInput
+                            type="date"
+                            value={tx.date || ""}
+                            onChange={(e) => quickUpdateFutureTx(tx, { date: e.target.value })}
+                            style={{ width: 148 }}
+                          />
+                          <span style={{ fontSize: 11.5, color: "#6B7280", fontWeight: 600, marginLeft: 4 }}>수량</span>
+                          <TextInput
+                            key={`${tx.id}-${tx.qty}`}
+                            type="number"
+                            min={1}
+                            defaultValue={tx.qty}
+                            onBlur={(e) => { const n = Number(e.target.value); if (n && !Number.isNaN(n) && n > 0 && n !== tx.qty) quickUpdateFutureTx(tx, { qty: n }); }}
+                            style={{ width: 76 }}
+                          />
+                          <span style={{ fontSize: 12, color: "#8A93A6" }}>{tx.unit || ""}</span>
+                          <IconBtn title="자세히 수정" color="#6B7280" onClick={() => setTxModal({ item: items.find((i) => i.id === tx.itemId), tx })}><Edit2 size={14} /></IconBtn>
+                          <button
+                            type="button"
+                            onClick={() => setDeleteFutureTxTarget(tx)}
+                            title="입고예정 삭제"
+                            style={{ border: "1px solid #F6C9CE", background: "#fff", borderRadius: 6, width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#E63946", flexShrink: 0 }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         );
       })()}
@@ -1900,6 +1990,15 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
             : `입고예정 '${deleteIncomingTarget.name}'을(를) 삭제하시겠습니까?`}
           onConfirm={() => deleteIncoming(deleteIncomingTarget)}
           onClose={() => setDeleteIncomingTarget(null)}
+        />
+      )}
+      {deleteFutureTxTarget && (
+        <ConfirmDialog
+          text={isMember
+            ? `${itemNameFor(deleteFutureTxTarget.itemId)}의 입고예정(${deleteFutureTxTarget.date}) 삭제를 관리자에게 요청하시겠습니까?`
+            : `${itemNameFor(deleteFutureTxTarget.itemId)}의 입고예정(${deleteFutureTxTarget.date})을 삭제하시겠습니까?`}
+          onConfirm={() => deleteFutureTx(deleteFutureTxTarget)}
+          onClose={() => setDeleteFutureTxTarget(null)}
         />
       )}
     </div>
