@@ -982,6 +982,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteIncomingTarget, setDeleteIncomingTarget] = useState(null);
   const [deleteFutureTxTarget, setDeleteFutureTxTarget] = useState(null);
+  const [futureTxsOpen, setFutureTxsOpen] = useState(false);
   const [expandedItem, setExpandedItem] = useState(null);
   const [notice, setNotice] = useState("");
   const [incomingChoice, setIncomingChoice] = useState({});
@@ -1456,10 +1457,10 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                 입고예정 ({pendingIncoming.length + futureTxs.length}건) — 한눈에 보기
               </div>
               <div style={{ display: "flex", gap: 6 }}>
-                <GhostButton onClick={() => setExpandedIncomingGroups(new Set(incomingGroups.map((g) => g.key)))} style={{ padding: "6px 10px", fontSize: 12 }}>
+                <GhostButton onClick={() => { setExpandedIncomingGroups(new Set(incomingGroups.map((g) => g.key))); setFutureTxsOpen(true); }} style={{ padding: "6px 10px", fontSize: 12 }}>
                   전체 펼치기
                 </GhostButton>
-                <GhostButton onClick={() => { setExpandedIncomingGroups(new Set()); setExpandedIncomingItems(new Set()); }} style={{ padding: "6px 10px", fontSize: 12 }}>
+                <GhostButton onClick={() => { setExpandedIncomingGroups(new Set()); setExpandedIncomingItems(new Set()); setFutureTxsOpen(false); }} style={{ padding: "6px 10px", fontSize: 12 }}>
                   전체 접기
                 </GhostButton>
               </div>
@@ -1521,54 +1522,54 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                       const validWhQty = !Number.isNaN(whQty) && whQty >= 0 && whQty <= req.qty;
                       const projQty = validWhQty ? req.qty - whQty : null;
                       return (
-                        <div key={req.id} style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: "10px 14px" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                              <span style={{ fontWeight: 700, fontSize: 14, color: "#14213D" }}>{req.name}</span>
+                        <div key={req.id} style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: "8px 12px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                              <span style={{ fontWeight: 700, fontSize: 12.5, color: "#14213D" }}>{req.name}</span>
                               {req.itemId && (
-                                <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>
+                                <span style={{ padding: "1px 6px", borderRadius: 999, fontSize: 9.5, fontWeight: 700, background: "#EAF7F5", color: "#2A9D8F" }}>
                                   기존 재고 품목 (예비 발주)
                                 </span>
                               )}
                               {isPendingRequest && (
-                                <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>
+                                <span style={{ padding: "1px 6px", borderRadius: 999, fontSize: 9.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>
                                   승인대기
                                 </span>
                               )}
                             </div>
-                            <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                              <span style={{ fontSize: 11.5, color: "#6B7280", fontWeight: 600 }}>입고일</span>
+                            <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                              <span style={{ fontSize: 10.5, color: "#6B7280", fontWeight: 600 }}>입고일</span>
                               <TextInput
                                 type="date"
                                 value={req.expectedDate || ""}
                                 onChange={(e) => setExpectedDate(req, e.target.value)}
-                                style={{ width: 148 }}
+                                style={{ width: 132, fontSize: 12, padding: "5px 7px" }}
                               />
-                              <span style={{ fontSize: 11.5, color: "#6B7280", fontWeight: 600, marginLeft: 4 }}>수량</span>
+                              <span style={{ fontSize: 10.5, color: "#6B7280", fontWeight: 600, marginLeft: 3 }}>수량</span>
                               <TextInput
                                 key={`${req.id}-${req.qty}`}
                                 type="number"
                                 min={1}
                                 defaultValue={req.qty}
                                 onBlur={(e) => setIncomingQty(req, e.target.value)}
-                                style={{ width: 76 }}
+                                style={{ width: 64, fontSize: 12, padding: "5px 7px" }}
                               />
-                              <span style={{ fontSize: 12, color: "#8A93A6" }}>{req.unit || ""}</span>
+                              <span style={{ fontSize: 11, color: "#8A93A6" }}>{req.unit || ""}</span>
                               <button
                                 type="button"
                                 onClick={() => toggleIncomingItem(req.id)}
                                 title="창고/현장 분할 및 입고 확정"
-                                style={{ border: "1px solid #DADFE6", background: isItemOpen ? "#14213D" : "#fff", borderRadius: 6, width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: isItemOpen ? "#fff" : "#6B7280", flexShrink: 0 }}
+                                style={{ border: "1px solid #DADFE6", background: isItemOpen ? "#14213D" : "#fff", borderRadius: 6, width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: isItemOpen ? "#fff" : "#6B7280", flexShrink: 0 }}
                               >
-                                <ChevronRight size={14} style={{ transform: isItemOpen ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
+                                <ChevronRight size={13} style={{ transform: isItemOpen ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
                               </button>
                               <button
                                 type="button"
                                 onClick={() => setDeleteIncomingTarget(req)}
                                 title="입고예정 삭제"
-                                style={{ border: "1px solid #F6C9CE", background: "#fff", borderRadius: 6, width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#E63946", flexShrink: 0 }}
+                                style={{ border: "1px solid #F6C9CE", background: "#fff", borderRadius: 6, width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#E63946", flexShrink: 0 }}
                               >
-                                <Trash2 size={14} />
+                                <Trash2 size={13} />
                               </button>
                             </div>
                           </div>
@@ -1648,55 +1649,62 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
               })}
             </div>
             {futureTxs.length > 0 && (
-              <div style={{ marginTop: incomingGroups.length > 0 ? 16 : 0 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 700, color: "#6B7280", marginBottom: 8 }}>
-                  이미 등록된 품목의 향후 입고 예정 ({futureTxs.length}건)
+              <div style={{ marginTop: incomingGroups.length > 0 ? 16 : 0, background: "#F7F8FA", border: "1px solid #EEF0F3", borderRadius: 10, overflow: "hidden" }}>
+                <div
+                  onClick={() => setFutureTxsOpen(!futureTxsOpen)}
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", cursor: "pointer" }}
+                >
+                  <ChevronRight size={15} style={{ color: "#A2A9B8", transform: futureTxsOpen ? "rotate(90deg)" : "none", transition: "transform .15s", flexShrink: 0 }} />
+                  <span style={{ fontWeight: 700, fontSize: 12.5, color: "#6B7280" }}>이미 등록된 품목의 향후 입고 예정</span>
+                  <span style={{ fontSize: 11, color: "#A2A9B8" }}>{futureTxs.length}건</span>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {futureTxsOpen && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "0 14px 14px" }}>
                   {futureTxs.map((tx) => {
                     const isFuturePendingRequest = pending.some((p) => p.entity === "transaction" && p.targetId === tx.id);
                     return (
-                      <div key={tx.id} style={{ background: "#F7F8FA", border: "1px solid #EEF0F3", borderRadius: 10, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                          <span style={{ fontWeight: 700, fontSize: 14, color: "#14213D" }}>{itemNameFor(tx.itemId)}</span>
+                      <div key={tx.id} style={{ background: "#fff", border: "1px solid #EEF0F3", borderRadius: 10, padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 700, fontSize: 12.5, color: "#14213D" }}>{itemNameFor(tx.itemId)}</span>
                           {isFuturePendingRequest && (
-                            <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>
+                            <span style={{ padding: "1px 6px", borderRadius: 999, fontSize: 9.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>
                               승인대기
                             </span>
                           )}
                         </div>
-                        <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                          <span style={{ fontSize: 11.5, color: "#6B7280", fontWeight: 600 }}>입고일</span>
+                        <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 10.5, color: "#6B7280", fontWeight: 600 }}>입고일</span>
                           <TextInput
                             type="date"
                             value={tx.date || ""}
                             onChange={(e) => quickUpdateFutureTx(tx, { date: e.target.value })}
-                            style={{ width: 148 }}
+                            style={{ width: 132, fontSize: 12, padding: "5px 7px" }}
                           />
-                          <span style={{ fontSize: 11.5, color: "#6B7280", fontWeight: 600, marginLeft: 4 }}>수량</span>
+                          <span style={{ fontSize: 10.5, color: "#6B7280", fontWeight: 600, marginLeft: 3 }}>수량</span>
                           <TextInput
                             key={`${tx.id}-${tx.qty}`}
                             type="number"
                             min={1}
                             defaultValue={tx.qty}
                             onBlur={(e) => { const n = Number(e.target.value); if (n && !Number.isNaN(n) && n > 0 && n !== tx.qty) quickUpdateFutureTx(tx, { qty: n }); }}
-                            style={{ width: 76 }}
+                            style={{ width: 64, fontSize: 12, padding: "5px 7px" }}
                           />
-                          <span style={{ fontSize: 12, color: "#8A93A6" }}>{tx.unit || ""}</span>
-                          <IconBtn title="자세히 수정" color="#6B7280" onClick={() => setTxModal({ item: items.find((i) => i.id === tx.itemId), tx })}><Edit2 size={14} /></IconBtn>
+                          <span style={{ fontSize: 11, color: "#8A93A6" }}>{tx.unit || ""}</span>
+                          <IconBtn title="자세히 수정" color="#6B7280" onClick={() => setTxModal({ item: items.find((i) => i.id === tx.itemId), tx })}><Edit2 size={13} /></IconBtn>
                           <button
                             type="button"
                             onClick={() => setDeleteFutureTxTarget(tx)}
                             title="입고예정 삭제"
-                            style={{ border: "1px solid #F6C9CE", background: "#fff", borderRadius: 6, width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#E63946", flexShrink: 0 }}
+                            style={{ border: "1px solid #F6C9CE", background: "#fff", borderRadius: 6, width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#E63946", flexShrink: 0 }}
                           >
-                            <Trash2 size={14} />
+                            <Trash2 size={13} />
                           </button>
                         </div>
                       </div>
                     );
                   })}
                 </div>
+                )}
               </div>
             )}
           </div>
