@@ -981,13 +981,12 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
     const isLinkedToExistingItem = !!req.itemId;
     const whQty = choice.warehouseQty !== undefined && choice.warehouseQty !== "" ? Number(choice.warehouseQty) : req.qty;
     if (Number.isNaN(whQty) || whQty < 0 || whQty > req.qty) return;
-    if (whQty > 0 && !isLinkedToExistingItem && !choice.location) return;
     const projQty = req.qty - whQty;
 
     if (isMember) {
       const created = await insertPending({
         entity: "incoming", action: "receive", targetId: req.id,
-        payload: { warehouseQty: whQty, projectQty: projQty, location: whQty > 0 ? (choice.location || null) : null },
+        payload: { warehouseQty: whQty, projectQty: projQty, location: whQty > 0 ? (choice.location || "") : null },
         summary: `입고예정 '${req.name}' 처리 요청 (창고 ${whQty}${req.unit || ""} / 현장 직접 ${projQty}${req.unit || ""})`,
         requestedBy: username,
       });
@@ -1006,11 +1005,11 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
         });
         setTransactions([newTx, ...transactions]);
       } else {
-        const newItem = await insertItem({ name: req.name, location: choice.location, unit: req.unit || "EA", note: "" });
+        const newItem = await insertItem({ name: req.name, location: choice.location || "", unit: req.unit || "EA", note: "" });
         setItems([...items, newItem]);
         const newTx = await insertTransaction({
           itemId: newItem.id, type: "in", qty: whQty, date: todayStr(), vendorId: null,
-          note: `입고예정 확정 (${choice.location})`,
+          note: `입고예정 확정 (${choice.location || "위치 미분류"})`,
         });
         setTransactions([newTx, ...transactions]);
         finalItemId = newItem.id;
@@ -1018,7 +1017,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
     }
     const updatedReq = await updateIncomingRequest(req.id, {
       status: "received", warehouseQty: whQty, projectQty: projQty,
-      location: whQty > 0 && !isLinkedToExistingItem ? choice.location : req.location,
+      location: whQty > 0 && !isLinkedToExistingItem ? (choice.location || "") : req.location,
       itemId: finalItemId, receivedAt: new Date().toISOString(),
     });
     setIncoming(incoming.map((r) => (r.id === req.id ? updatedReq : r)));
@@ -1038,7 +1037,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
   const locationGroups = useMemo(() => {
     const map = {};
     for (const it of filtered) {
-      const key = it.location ? it.location.split("-")[0].toUpperCase() : "위치 미지정";
+      const key = it.location ? it.location.split("-")[0].toUpperCase() : "위치 미분류";
       if (!map[key]) map[key] = [];
       map[key].push(it);
     }
@@ -1373,10 +1372,13 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                     <td colSpan={7} style={{ padding: "9px 14px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <ChevronRight size={14} style={{ transform: isGroupOpen ? "rotate(90deg)" : "none", transition: "transform .15s", color: "#8A93A6" }} />
-                        <span style={{ fontWeight: 800, fontSize: 12.5, color: "#14213D" }}>
-                          {group.key === "위치 미지정" ? "위치 미지정" : `${group.key} 구역`}
+                        <span style={{ fontWeight: 800, fontSize: 12.5, color: group.key === "위치 미분류" ? "#FB8500" : "#14213D" }}>
+                          {group.key === "위치 미분류" ? "위치 미분류" : `${group.key} 구역`}
                         </span>
                         <span style={{ fontSize: 11.5, color: "#8A93A6", fontWeight: 600 }}>({group.list.length}개)</span>
+                        {group.key === "위치 미분류" && (
+                          <span style={{ fontSize: 11, color: "#FB8500", fontWeight: 600 }}>· 창고에 도착하면 품목 수정에서 위치를 지정해주세요</span>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -1659,21 +1661,26 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
                               </span>
                             </div>
                             {validWhQty && whQty > 0 && !req.itemId && (
-                              <TextInput
-                                value={choice.location || ""}
-                                onChange={(e) => setChoice(req.id, { location: e.target.value })}
-                                placeholder="창고 위치 (예: A-1)"
-                                list="location-options-incoming"
-                                style={{ width: 150 }}
-                              />
+                              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                                <TextInput
+                                  value={choice.location || ""}
+                                  onChange={(e) => setChoice(req.id, { location: e.target.value })}
+                                  placeholder="창고 위치 (예: A-1, 비워두면 위치 미분류)"
+                                  list="location-options-incoming"
+                                  style={{ width: 200 }}
+                                />
+                                {!choice.location && (
+                                  <span style={{ fontSize: 10.5, color: "#FB8500" }}>위치를 비워두면 "위치 미분류"로 등록되며, 나중에 재고관리에서 위치를 지정할 수 있습니다.</span>
+                                )}
+                              </div>
                             )}
                             {validWhQty && whQty > 0 && req.itemId && (
                               <span style={{ fontSize: 11.5, color: "#8A93A6" }}>기존 재고 품목에 바로 추가됩니다</span>
                             )}
                             <PrimaryButton
                               onClick={() => confirmIncoming(req)}
-                              disabled={!validWhQty || (whQty > 0 && !req.itemId && !choice.location) || isPendingRequest}
-                              style={{ opacity: !validWhQty || (whQty > 0 && !req.itemId && !choice.location) || isPendingRequest ? 0.5 : 1 }}
+                              disabled={!validWhQty || isPendingRequest}
+                              style={{ opacity: !validWhQty || isPendingRequest ? 0.5 : 1 }}
                             >
                               {isMember ? "처리 요청" : "확정"}
                             </PrimaryButton>
@@ -3829,7 +3836,7 @@ function AdminTab({
               setItems([...items, newItem]);
               const newTx = await insertTransaction({
                 itemId: newItem.id, type: "in", qty: whQty, date: todayStr(), vendorId: null,
-                note: `입고예정 확정 (${location || "위치 미지정"})`,
+                note: `입고예정 확정 (${location || "위치 미분류"})`,
               });
               setTransactions([newTx, ...transactions]);
               finalItemId = newItem.id;
