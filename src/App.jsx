@@ -89,11 +89,9 @@ function colorForSite(key) {
   for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
   return EVENT_COLOR_PALETTE[hash % EVENT_COLOR_PALETTE.length];
 }
-// 직원 이름을 "성+직책"으로 축약 표시 (예: 김철수 실장 -> 김실장). 직책이 없으면 이름 그대로.
-function staffLabel(name, staffList) {
-  const s = (staffList || []).find((st) => st.name === name);
-  if (!s || !s.position) return name;
-  return name.slice(0, 1) + s.position;
+// 직원 표시 이름: 이름만 표시 (예: 김철수). 달력·인원관리대장 공통.
+function staffLabel(name) {
+  return name;
 }
 // 오늘부터 dateStr까지 남은 일수 (음수면 지난 날짜)
 function daysUntil(dateStr) {
