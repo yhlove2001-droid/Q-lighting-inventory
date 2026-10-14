@@ -5082,7 +5082,7 @@ function AdminTab({
     && ((l.action === "INSERT" && l.new_data) || (l.action === "UPDATE" && l.old_data && l.new_data) || (l.action === "DELETE" && l.old_data));
   async function loadLogs() {
     setLogLoading(true);
-    try { setLogs(await fetchActivityLog(500)); setLogError(false); } catch (err) { console.error(err); setLogError(true); }
+    try { setLogs(await fetchActivityLog(3000)); setLogError(false); } catch (err) { console.error(err); setLogError(true); }
     setLogLoading(false);
   }
   useEffect(() => { loadLogs(); }, []);
@@ -5110,7 +5110,7 @@ function AdminTab({
     setUndoTarget(null);
   }
   async function runBulkUndo() {
-    const ids = (bulkUndo || []).map((l) => l.id);
+    const ids = ((bulkUndo && bulkUndo.logs) || []).map((l) => l.id);
     try {
       const r = await undoActivities(ids);
       setLogNotice(`${r.ok}건을 되돌렸습니다.${r.skipped ? ` ${r.skipped}건은 이후에 다시 바뀌어 건너뛰었습니다. (개별로 확인해주세요)` : ""}${r.other ? ` ${r.other}건은 되돌릴 수 없었습니다.` : ""}`);
@@ -5120,6 +5120,58 @@ function AdminTab({
     }
     setBulkUndo(null);
   }
+  // ----- 같은 회원이 한꺼번에 만든 변경(예: 달력에서 불러오기 342건)은 한 줄로 묶어서 표시 -----
+  const [logOpen, setLogOpen] = useState({});
+  const logGroups = (() => {
+    const out = [];
+    for (const l of filteredLogs) {
+      const g = out[out.length - 1];
+      if (g && g.username === l.username && g.table_name === l.table_name && g.action === l.action
+          && Math.abs(new Date(g.lastTs) - new Date(l.created_at)) <= 10000) {
+        g.items.push(l); g.lastTs = l.created_at;
+      } else {
+        out.push({ key: l.id, username: l.username, table_name: l.table_name, action: l.action, ts: l.created_at, lastTs: l.created_at, items: [l] });
+      }
+    }
+    return out;
+  })();
+  const dataOf = (l) => l.new_data || l.old_data || {};
+  function attendanceSubgroups(items) {
+    const map = {};
+    for (const l of items) { const k = dataOf(l).site || "(현장 미입력)"; (map[k] = map[k] || []).push(l); }
+    return Object.keys(map).sort().map((site) => {
+      const list = map[site];
+      const dates = list.map((x) => dataOf(x).work_date).filter(Boolean).sort();
+      const people = new Set(list.map((x) => dataOf(x).staff_name)).size;
+      return { site, list, from: dates[0], to: dates[dates.length - 1], people };
+    });
+  }
+  function groupSummary(g) {
+    if (g.table_name === "attendance") {
+      const subs = attendanceSubgroups(g.items);
+      const head = subs.slice(0, 3).map((s) => `${s.site} ${s.list.length}건`).join(" · ");
+      return `출근기록 ${g.items.length}건 — ${head}${subs.length > 3 ? ` 외 ${subs.length - 3}곳` : ""}`;
+    }
+    return `${g.items[0].summary || ""} 외 ${g.items.length - 1}건`;
+  }
+  function undoCell(list, label) {
+    const todo = list.filter(isUndoable);
+    const done = list.filter((x) => x.undone_at).length;
+    if (todo.length === 0) {
+      return done > 0
+        ? <span style={{ fontSize: 11.5, color: "#8A93A6" }}>되돌림 완료</span>
+        : <span style={{ fontSize: 11.5, color: "#C0C6D2" }}>-</span>;
+    }
+    return (
+      <button
+        onClick={() => (list.length === 1 ? setUndoTarget({ log: list[0], conflict: false }) : setBulkUndo({ logs: todo, label }))}
+        style={{ border: "1px solid #DADFE6", background: "#fff", color: "#14213D", borderRadius: 6, padding: "3px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+      >
+        되돌리기{list.length > 1 ? ` (${todo.length}건)` : ""}
+      </button>
+    );
+  }
+
   const LOG_TABLE_LABEL = { items: "품목", transactions: "입출고", vendors: "거래처", events: "달력 일정", projects: "프로젝트", incoming_requests: "입고예정", staff: "직원", attendance: "출근기록" };
   const LOG_ACTION = {
     INSERT: { label: "등록", bg: "#E6F6EC", fg: "#15803D" },
@@ -5476,7 +5528,7 @@ function AdminTab({
       <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
         <div style={{ padding: "12px 18px", borderBottom: "1px solid #EEF0F3", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <div style={{ fontWeight: 800, fontSize: 14, color: "#14213D", display: "flex", alignItems: "center", gap: 8 }}>
-            <ClipboardList size={16} color="#FB8500" /> 변경 기록 ({filteredLogs.length}건)
+            <ClipboardList size={16} color="#FB8500" /> 변경 기록 ({filteredLogs.length}건{logGroups.length !== filteredLogs.length ? ` · ${logGroups.length}묶음` : ""})
           </div>
           <div style={{ flex: 1 }} />
           <Select value={logUser} onChange={(e) => { setLogUser(e.target.value); setLogLimit(60); }} style={{ padding: "6px 10px", fontSize: 12.5 }}>
@@ -5497,7 +5549,7 @@ function AdminTab({
           <div style={{ flex: 1 }} />
           <GhostButton
             disabled={bulkCandidates.length === 0}
-            onClick={() => setBulkUndo(bulkCandidates)}
+            onClick={() => setBulkUndo({ logs: bulkCandidates, label: `${logUser}${logFrom || logTo ? ` (${logFrom || "처음"} ~ ${logTo || "현재"})` : ""}의 변경` })}
             style={{ padding: "6px 12px", fontSize: 12.5, borderColor: "#E63946", color: "#E63946", opacity: bulkCandidates.length === 0 ? 0.45 : 1 }}
           >
             선택한 조건 {bulkCandidates.length}건 되돌리기
@@ -5521,7 +5573,7 @@ function AdminTab({
         )}
         {bulkUndo && (
           <ConfirmDialog
-            text={`${logUser}${logFrom || logTo ? ` (${logFrom || "처음"} ~ ${logTo || "현재"})` : ""}의 변경 ${bulkUndo.length}건을 최신 것부터 순서대로 되돌립니다. 이후에 다른 사람이 다시 바꾼 항목은 건너뜁니다. 진행할까요?`}
+            text={`${bulkUndo.label} ${bulkUndo.logs.length}건을 최신 것부터 순서대로 되돌립니다. 이후에 다른 사람이 다시 바꾼 항목은 건너뜁니다. 진행할까요?`}
             confirmLabel="일괄 되돌리기"
             onConfirm={runBulkUndo}
             onClose={() => setBulkUndo(null)}
@@ -5549,32 +5601,50 @@ function AdminTab({
                 </tr>
               </thead>
               <tbody>
-                {filteredLogs.slice(0, logLimit).map((l) => {
-                  const act = LOG_ACTION[l.action] || { label: l.action, bg: "#F1F2F5", fg: "#6B7280" };
-                  return (
-                    <tr key={l.id} style={{ borderTop: "1px solid #F1F2F5", fontSize: 12.5 }}>
-                      <td style={{ padding: "8px 18px", color: "#6B7280", whiteSpace: "nowrap", fontFamily: "ui-monospace, monospace" }}>{fmtLogTime(l.created_at)}</td>
-                      <td style={{ padding: "8px 12px", fontWeight: 700, color: "#14213D", whiteSpace: "nowrap" }}>{l.username || "-"}</td>
-                      <td style={{ padding: "8px 12px", color: "#4B5563", whiteSpace: "nowrap" }}>{LOG_TABLE_LABEL[l.table_name] || l.table_name}</td>
-                      <td style={{ padding: "8px 12px" }}>
-                        <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: act.bg, color: act.fg }}>{act.label}</span>
-                      </td>
-                      <td style={{ padding: "8px 12px", color: l.undone_at ? "#A2A9B8" : "#374151", textDecoration: l.undone_at ? "line-through" : "none" }}>{l.summary || "-"}</td>
-                      <td style={{ padding: "8px 18px", textAlign: "right", whiteSpace: "nowrap" }}>
-                        {l.undone_at ? (
-                          <span style={{ fontSize: 11.5, color: "#8A93A6" }}>되돌림 완료{l.undone_by ? ` (${l.undone_by})` : ""}</span>
-                        ) : isUndoable(l) ? (
-                          <button onClick={() => setUndoTarget({ log: l, conflict: false })} style={{ border: "1px solid #DADFE6", background: "#fff", color: "#14213D", borderRadius: 6, padding: "3px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>되돌리기</button>
-                        ) : (
-                          <span style={{ fontSize: 11.5, color: "#C0C6D2" }}>-</span>
-                        )}
-                      </td>
+                {logGroups.slice(0, logLimit).map((g) => {
+                  const act = LOG_ACTION[g.action] || { label: g.action, bg: "#F1F2F5", fg: "#6B7280" };
+                  const tdS = { padding: "8px 12px" };
+                  const rowFor = (l, indent) => (
+                    <tr key={l.id} style={{ borderTop: "1px solid #F1F2F5", fontSize: 12.5, background: indent ? "#FAFBFC" : undefined }}>
+                      <td style={{ padding: "8px 18px", color: "#6B7280", whiteSpace: "nowrap", fontFamily: "ui-monospace, monospace" }}>{indent ? "" : fmtLogTime(l.created_at)}</td>
+                      <td style={{ ...tdS, fontWeight: 700, color: "#14213D", whiteSpace: "nowrap" }}>{indent ? "" : l.username || "-"}</td>
+                      <td style={{ ...tdS, color: "#4B5563", whiteSpace: "nowrap" }}>{indent ? "" : LOG_TABLE_LABEL[l.table_name] || l.table_name}</td>
+                      <td style={tdS}>{!indent && <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: act.bg, color: act.fg }}>{act.label}</span>}</td>
+                      <td style={{ ...tdS, color: l.undone_at ? "#A2A9B8" : "#374151", textDecoration: l.undone_at ? "line-through" : "none" }}>{l.summary || "-"}</td>
+                      <td style={{ padding: "8px 18px", textAlign: "right", whiteSpace: "nowrap" }}>{undoCell([l], "")}</td>
                     </tr>
+                  );
+                  if (g.items.length === 1) return rowFor(g.items[0], false);
+                  const open = !!logOpen[g.key];
+                  const label = `${g.username}의 ${LOG_TABLE_LABEL[g.table_name] || g.table_name} ${act.label}`;
+                  return (
+                    <React.Fragment key={g.key}>
+                      <tr style={{ borderTop: "1px solid #F1F2F5", fontSize: 12.5 }}>
+                        <td style={{ padding: "8px 18px", color: "#6B7280", whiteSpace: "nowrap", fontFamily: "ui-monospace, monospace" }}>{fmtLogTime(g.ts)}</td>
+                        <td style={{ ...tdS, fontWeight: 700, color: "#14213D", whiteSpace: "nowrap" }}>{g.username || "-"}</td>
+                        <td style={{ ...tdS, color: "#4B5563", whiteSpace: "nowrap" }}>{LOG_TABLE_LABEL[g.table_name] || g.table_name}</td>
+                        <td style={tdS}><span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: act.bg, color: act.fg }}>{act.label}</span></td>
+                        <td style={{ ...tdS, color: "#374151", cursor: "pointer" }} onClick={() => setLogOpen({ ...logOpen, [g.key]: !open })}>
+                          <span style={{ display: "inline-block", width: 14, color: "#8A93A6" }}>{open ? "▾" : "▸"}</span>
+                          <b>{groupSummary(g)}</b> <span style={{ color: "#8A93A6", fontSize: 11.5 }}>(한꺼번에 {g.items.length}건)</span>
+                        </td>
+                        <td style={{ padding: "8px 18px", textAlign: "right", whiteSpace: "nowrap" }}>{undoCell(g.items, `${label} ${g.items.length}건 전체`)}</td>
+                      </tr>
+                      {open && g.table_name === "attendance" && attendanceSubgroups(g.items).map((sg) => (
+                        <tr key={g.key + sg.site} style={{ fontSize: 12.5, background: "#FAFBFC", borderTop: "1px solid #F1F2F5" }}>
+                          <td colSpan={5} style={{ padding: "7px 12px 7px 60px", color: "#374151" }}>
+                            <b>{sg.site}</b> · {sg.people}명 · {sg.from ? (sg.from === sg.to ? sg.from : `${sg.from} ~ ${sg.to}`) : ""} · {sg.list.length}건
+                          </td>
+                          <td style={{ padding: "7px 18px", textAlign: "right", whiteSpace: "nowrap" }}>{undoCell(sg.list, `${label} 중 ${sg.site} ${sg.list.length}건`)}</td>
+                        </tr>
+                      ))}
+                      {open && g.table_name !== "attendance" && g.items.map((l) => rowFor(l, true))}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
             </table>
-            {filteredLogs.length > logLimit && (
+            {logGroups.length > logLimit && (
               <div style={{ padding: 12, textAlign: "center", borderTop: "1px solid #F1F2F5" }}>
                 <GhostButton onClick={() => setLogLimit(logLimit + 100)} style={{ padding: "6px 14px", fontSize: 12.5 }}>더 보기</GhostButton>
               </div>
