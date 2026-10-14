@@ -316,3 +316,11 @@ export async function deleteAttendanceRow(id) {
   const { error } = await supabase.from("attendance").delete().eq("id", id);
   if (error) throw error;
 }
+
+export async function deleteAttendanceMany(ids) {
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200);
+    const { error } = await supabase.from("attendance").delete().in("id", chunk);
+    if (error) throw error;
+  }
+}

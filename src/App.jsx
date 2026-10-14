@@ -4,7 +4,7 @@ import {
   ArrowDownCircle, ArrowUpCircle, ChevronRight, ChevronLeft, Lock, User,
   ClipboardList, Truck, LayoutDashboard, CalendarDays, CalendarPlus,
   ShieldCheck, UserCheck, UserX, Check, Clock, RefreshCw, FolderKanban,
-  Printer, FileDown, Users
+  Printer, FileDown, Users, ChevronDown, UserPlus
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import * as XLSX from "xlsx";
@@ -18,7 +18,7 @@ import {
   fetchProjects, insertProject, updateProject, deleteProjectRow,
   fetchIncomingRequests, insertIncomingRequest, updateIncomingRequest, deleteIncomingRequestRow,
   fetchStaff, insertStaff, updateStaff, deleteStaffRow,
-  fetchAttendance, insertAttendanceMany, updateAttendance, deleteAttendanceRow,
+  fetchAttendance, insertAttendanceMany, updateAttendance, deleteAttendanceRow, deleteAttendanceMany,
   fetchPending, insertPending, deletePendingRow,
 } from "./api";
 
@@ -3377,7 +3377,7 @@ function EventFormModal({ initial, defaultDate, staff = [], onSave, onDelete, on
   const [endDate, setEndDate] = useState(initial?.endDate || "");
   const [title, setTitle] = useState(initial?.title || "");
   const [assignees, setAssignees] = useState(initial?.assignees || []);
-  const [site, setSite] = useState(initial?.site || "");
+  const [site, setSite] = useState(initial?.site || preset?.site || "");
   const [note, setNote] = useState(initial?.note || "");
 
   function toggleAssignee(name) {
@@ -4009,12 +4009,12 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
 const WEEKDAY_KR = ["일", "월", "화", "수", "목", "금", "토"];
 const WORK_UNIT_OPTIONS = [0.5, 1, 1.5, 2];
 
-function AttendanceFormModal({ staff, siteOptions, initial, onSave, onClose }) {
+function AttendanceFormModal({ staff, siteOptions, initial, preset, onSave, onClose }) {
   const isEdit = !!initial;
   const [startDate, setStartDate] = useState(initial?.workDate || todayStr());
   const [endDate, setEndDate] = useState("");
   const [excludeWeekend, setExcludeWeekend] = useState(false);
-  const [names, setNames] = useState(initial ? [initial.staffName] : []);
+  const [names, setNames] = useState(initial ? [initial.staffName] : preset?.name ? [preset.name] : []);
   const [site, setSite] = useState(initial?.site || "");
   const [workUnit, setWorkUnit] = useState(String(initial?.workUnit ?? 1));
   const [note, setNote] = useState(initial?.note || "");
@@ -4141,14 +4141,48 @@ function AttendanceFormModal({ staff, siteOptions, initial, onSave, onClose }) {
   );
 }
 
-function AttendanceTab({ attendance, setAttendance, events, staff = [], role, username, pending, setPending }) {
+function StaffAddModal({ onSave, onClose }) {
+  const [name, setName] = useState("");
+  const [position, setPosition] = useState("");
+  const [error, setError] = useState("");
+  function submit() {
+    if (!name.trim()) { setError("이름을 입력해주세요."); return; }
+    onSave(name, position);
+  }
+  return (
+    <Modal title="새 인원 추가" onClose={onClose} width={400}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <Field label="이름" required>
+          <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="예: 홍길동" autoFocus style={{ width: "100%", boxSizing: "border-box" }} />
+        </Field>
+        <Field label="직책">
+          <TextInput value={position} onChange={(e) => setPosition(e.target.value)} placeholder="예: 과장, 사원 (선택)" style={{ width: "100%", boxSizing: "border-box" }}
+            onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+        </Field>
+        <div style={{ fontSize: 11.5, color: "#8A93A6" }}>추가한 인원은 달력 탭의 직원 명단에도 함께 반영됩니다.</div>
+        {error && <div style={{ fontSize: 12.5, color: "#E63946", fontWeight: 600 }}>{error}</div>}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <GhostButton onClick={onClose}>취소</GhostButton>
+          <PrimaryButton onClick={submit}>추가</PrimaryButton>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff, role, username, pending, setPending }) {
   const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
-  const [personFilter, setPersonFilter] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editRow, setEditRow] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [viewMode, setViewMode] = useState("person"); // person | site
+  const [openGroups, setOpenGroups] = useState({});
+  const [expandAll, setExpandAll] = useState(false);
+  const [showStaffForm, setShowStaffForm] = useState(false);
+  const [preset, setPreset] = useState(null);
+  const [bulkTarget, setBulkTarget] = useState(null);
   const isMember = role === "member";
 
   const year = cursor.getFullYear();
@@ -4172,7 +4206,6 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], role, us
       .sort((a, b) => a.workDate.localeCompare(b.workDate) || a.staffName.localeCompare(b.staffName)),
     [attendance, monthPrefix]
   );
-  const tableRows = personFilter ? monthRows.filter((a) => a.staffName === personFilter) : monthRows;
 
   // 인원별 집계 (출근일수 / 총 공수 / 투입 현장) - 나중에 인건비 산출 기준
   const summary = useMemo(() => {
@@ -4188,6 +4221,69 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], role, us
     }));
   }, [monthRows]);
   const totalUnits = summary.reduce((s, r) => s + r.units, 0);
+
+  const groups = useMemo(() => {
+    const map = {};
+    if (viewMode === "person") for (const s of staff) map[s.name] = [];
+    for (const a of monthRows) {
+      const k = viewMode === "person" ? a.staffName : (a.site || "(현장 미입력)");
+      (map[k] = map[k] || []).push(a);
+    }
+    return Object.keys(map).sort((x, y) => x.localeCompare(y)).map((k) => {
+      const rows = map[k];
+      const units = Math.round(rows.reduce((t, r) => t + r.workUnit, 0) * 100) / 100;
+      const days = new Set(rows.map((r) => r.workDate)).size;
+      const tags = Array.from(new Set(rows.map((r) => (viewMode === "person" ? r.site : r.staffName)).filter(Boolean)));
+      return { key: k, rows, units, days, tags };
+    });
+  }, [monthRows, staff, viewMode]);
+  const isOpen = (k) => expandAll || !!openGroups[viewMode + ":" + k];
+  function toggleGroup(k) { setOpenGroups((p) => ({ ...p, [viewMode + ":" + k]: !p[viewMode + ":" + k] })); }
+  function setAllOpen(v) {
+    const next = {};
+    for (const g of groups) next[viewMode + ":" + g.key] = v;
+    setOpenGroups(next);
+  }
+  function printNow() {
+    setExpandAll(true);
+    setTimeout(() => { printElementById("attendance-print-area"); setExpandAll(false); }, 200);
+  }
+
+  async function addStaff(name, position) {
+    const trimmed = name.trim();
+    const trimmedPos = (position || "").trim();
+    if (!trimmed) return;
+    if (staff.some((s) => s.name === trimmed)) { setNotice(`'${trimmed}' 님은 이미 등록되어 있습니다.`); setShowStaffForm(false); return; }
+    try {
+      if (isMember) {
+        const created = await insertPending({
+          entity: "staff", action: "create", targetId: null, payload: { name: trimmed, position: trimmedPos },
+          summary: `직원 '${trimmed}${trimmedPos ? " " + trimmedPos : ""}' 등록 요청`, requestedBy: username,
+        });
+        setPending([created, ...pending]);
+        setNotice("직원 등록 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
+      } else {
+        const created = await insertStaff({ name: trimmed, position: trimmedPos });
+        setStaff([...staff, created].sort((a, b) => a.name.localeCompare(b.name)));
+        setNotice(`'${trimmed}${trimmedPos ? " " + trimmedPos : ""}' 님이 추가되었습니다.`);
+      }
+      setShowStaffForm(false);
+    } catch (err) {
+      setNotice(`직원 등록에 실패했습니다: ${err?.message || err}`);
+    }
+  }
+
+  async function deleteMany(rows) {
+    try {
+      await deleteAttendanceMany(rows.map((r) => r.id));
+      const ids = new Set(rows.map((r) => r.id));
+      setAttendance(attendance.filter((a) => !ids.has(a.id)));
+      setNotice(`출근기록 ${rows.length}건이 삭제되었습니다.`);
+    } catch (err) {
+      setNotice(`삭제 중 오류가 발생했습니다: ${err?.message || err}`);
+    }
+    setBulkTarget(null);
+  }
 
   const personOptions = useMemo(
     () => Array.from(new Set(monthRows.map((a) => a.staffName))).sort(),
@@ -4334,10 +4430,14 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], role, us
           <div style={{ minWidth: 104, textAlign: "center", fontWeight: 800, fontSize: 14.5, color: "#14213D" }}>{monthLabel}</div>
           <button onClick={() => setCursor(new Date(year, month + 1, 1))} style={{ border: "1px solid #DADFE6", background: "#fff", borderRadius: 6, width: 32, height: 32, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><ChevronRight size={15} /></button>
         </div>
-        <Select value={personFilter} onChange={(e) => setPersonFilter(e.target.value)} style={{ padding: "7px 10px", fontSize: 13 }}>
-          <option value="">전체 인원</option>
-          {personOptions.map((n) => <option key={n} value={n}>{n}</option>)}
-        </Select>
+        <div style={{ display: "inline-flex", border: "1px solid #DADFE6", borderRadius: 8, overflow: "hidden" }}>
+          {[["person", "인원별"], ["site", "현장별"]].map(([m, label]) => (
+            <button key={m} onClick={() => setViewMode(m)} style={{
+              padding: "7px 14px", fontSize: 13, fontWeight: 700, border: "none", cursor: "pointer",
+              background: viewMode === m ? "#14213D" : "#fff", color: viewMode === m ? "#fff" : "#6B7280",
+            }}>{label}</button>
+          ))}
+        </div>
         <div style={{ flex: 1 }} />
         <GhostButton
           onClick={importFromCalendar}
@@ -4346,101 +4446,132 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], role, us
         >
           <CalendarDays size={14} /> 달력 일정에서 불러오기{importCandidates.length > 0 ? ` (${importCandidates.length}건)` : ""}
         </GhostButton>
-        <PrimaryButton onClick={() => setShowForm(true)}>
+        <GhostButton onClick={() => setShowStaffForm(true)} style={{ padding: "8px 12px", fontSize: 12.5 }}>
+          <UserPlus size={14} /> 인원 추가
+        </GhostButton>
+        <PrimaryButton onClick={() => { setPreset(null); setShowForm(true); }}>
           <Plus size={16} /> 출근 기록 추가
         </PrimaryButton>
         <GhostButton onClick={exportExcel} style={{ padding: "8px 12px", fontSize: 12.5 }}>
           <FileDown size={14} /> 엑셀로 저장
         </GhostButton>
-        <GhostButton onClick={() => printElementById("attendance-print-area")} style={{ padding: "8px 12px", fontSize: 12.5 }}>
+        <GhostButton onClick={printNow} style={{ padding: "8px 12px", fontSize: 12.5 }}>
           <Printer size={14} /> 인쇄
         </GhostButton>
+        {!isMember && monthRows.length > 0 && (
+          <GhostButton onClick={() => setBulkTarget({ label: `${monthLabel} 출근기록 전체`, rows: monthRows })}
+            style={{ padding: "8px 12px", fontSize: 12.5, borderColor: "#E63946", color: "#E63946" }}>
+            <Trash2 size={14} /> {month + 1}월 전체 삭제
+          </GhostButton>
+        )}
       </div>
 
-      <div id="attendance-print-area" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
-          <div style={{ padding: "12px 16px", borderBottom: "1px solid #EEF0F3", display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
-            <div style={{ fontWeight: 800, fontSize: 14, color: "#14213D" }}>인원관리대장 — {monthLabel} 인원별 집계</div>
-            <div style={{ fontSize: 12, color: "#8A93A6" }}>총 {summary.length}명 · 총 공수 {totalUnits}</div>
+      <div id="attendance-print-area" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, padding: "0 4px" }}>
+          <div style={{ fontWeight: 800, fontSize: 14, color: "#14213D" }}>
+            인원관리대장 — {monthLabel} {viewMode === "person" ? "인원별" : "현장별"}
           </div>
-          <div className="table-scroll">
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ background: "#F7F8FA", color: "#6B7280" }}>
-                  <th style={th}>이름</th><th style={th}>직책</th>
-                  <th style={{ ...th, textAlign: "right" }}>출근일수</th>
-                  <th style={{ ...th, textAlign: "right" }}>총 공수</th>
-                  <th style={th}>투입 현장</th>
-                </tr>
-              </thead>
-              <tbody>
-                {summary.length === 0 && (
-                  <tr><td colSpan={5} style={{ padding: 22, textAlign: "center", color: "#A2A9B8", fontSize: 13 }}>이 달의 출근 기록이 없습니다.</td></tr>
-                )}
-                {summary.map((r) => (
-                  <tr key={r.name} style={{ borderTop: "1px solid #F1F2F5" }}>
-                    <td style={{ ...td, fontWeight: 700, color: "#14213D" }}>{r.name}</td>
-                    <td style={{ ...td, color: "#6B7280" }}>{positionOf(r.name) || "-"}</td>
-                    <td style={{ ...td, textAlign: "right", fontFamily: "ui-monospace, monospace" }}>{r.days}일</td>
-                    <td style={{ ...td, textAlign: "right", fontFamily: "ui-monospace, monospace", fontWeight: 800 }}>{r.units}</td>
-                    <td style={{ ...td, color: "#6B7280" }}>{r.sites.join(", ") || "-"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 12, color: "#8A93A6" }}>
+              {viewMode === "person" ? `인원 ${summary.length}명` : `현장 ${groups.length}곳`} · 총 공수 {Math.round(totalUnits * 100) / 100}
+            </span>
+            <span className="no-print" style={{ display: "inline-flex", gap: 10, fontSize: 12 }}>
+              <button onClick={() => setAllOpen(true)} style={{ border: "none", background: "none", color: "#3B82F6", cursor: "pointer", fontWeight: 700 }}>모두 펼치기</button>
+              <button onClick={() => { setExpandAll(false); setAllOpen(false); }} style={{ border: "none", background: "none", color: "#6B7280", cursor: "pointer", fontWeight: 700 }}>모두 접기</button>
+            </span>
           </div>
         </div>
 
-        <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
-          <div style={{ padding: "12px 16px", borderBottom: "1px solid #EEF0F3", fontWeight: 800, fontSize: 14, color: "#14213D" }}>
-            일자별 출근기록{personFilter ? ` — ${personFilter}` : ""} ({tableRows.length}건)
+        {groups.length === 0 && (
+          <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", padding: 28, textAlign: "center", color: "#A2A9B8", fontSize: 13 }}>
+            이 달의 출근 기록이 없습니다. "출근 기록 추가" 또는 "달력 일정에서 불러오기"로 등록하세요.
           </div>
-          <div className="table-scroll">
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ background: "#F7F8FA", color: "#6B7280" }}>
-                  <th style={th}>날짜</th><th style={th}>요일</th><th style={th}>이름</th><th style={th}>직책</th>
-                  <th style={th}>현장</th>
-                  <th style={{ ...th, textAlign: "right" }}>공수</th>
-                  <th style={th}>비고</th>
-                  <th className="no-print" style={{ ...th, textAlign: "right" }}>작업</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tableRows.length === 0 && (
-                  <tr><td colSpan={8} style={{ padding: 24, textAlign: "center", color: "#A2A9B8", fontSize: 13 }}>
-                    기록이 없습니다. "출근 기록 추가" 또는 "달력 일정에서 불러오기"로 등록하세요.
-                  </td></tr>
-                )}
-                {tableRows.map((a) => {
-                  const dow = new Date(a.workDate + "T00:00:00").getDay();
-                  return (
-                    <tr key={a.id} style={{ borderTop: "1px solid #F1F2F5" }}>
-                      <td style={{ ...td, fontFamily: "ui-monospace, monospace", whiteSpace: "nowrap" }}>{a.workDate}</td>
-                      <td style={{ ...td, color: dow === 0 ? "#E63946" : dow === 6 ? "#3B82F6" : "#6B7280" }}>{WEEKDAY_KR[dow]}</td>
-                      <td style={{ ...td, fontWeight: 700, color: "#14213D", whiteSpace: "nowrap" }}>
-                        {a.staffName}
-                        {hasPending(a.id) && (
-                          <span className="no-print" style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 999, fontSize: 9.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>승인대기</span>
-                        )}
-                      </td>
-                      <td style={{ ...td, color: "#6B7280" }}>{positionOf(a.staffName) || "-"}</td>
-                      <td style={td}>{a.site || "-"}</td>
-                      <td style={{ ...td, textAlign: "right", fontFamily: "ui-monospace, monospace" }}>{a.workUnit}</td>
-                      <td style={{ ...td, color: "#6B7280" }}>{a.note || ""}</td>
-                      <td className="no-print" style={{ ...td, textAlign: "right" }}>
-                        <div style={{ display: "inline-flex", gap: 6 }}>
-                          <IconBtn title={isMember ? "수정 요청" : "수정"} color="#6B7280" onClick={() => setEditRow(a)}><Edit2 size={14} /></IconBtn>
-                          <IconBtn title={isMember ? "삭제 요청" : "삭제"} color="#6B7280" onClick={() => setDeleteTarget(a)}><Trash2 size={14} /></IconBtn>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        )}
+
+        {groups.map((g) => {
+          const open = isOpen(g.key);
+          const pos = viewMode === "person" ? positionOf(g.key) : "";
+          return (
+            <div key={g.key} style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
+              <div onClick={() => toggleGroup(g.key)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", cursor: "pointer", flexWrap: "wrap" }}>
+                <ChevronDown className="no-print" size={16} color="#8A93A6" style={{ transform: open ? "none" : "rotate(-90deg)", transition: "transform .15s", flexShrink: 0 }} />
+                <div style={{ fontWeight: 800, fontSize: 14, color: "#14213D" }}>
+                  {g.key}{pos && <span style={{ marginLeft: 6, fontWeight: 600, fontSize: 12, color: "#8A93A6" }}>{pos}</span>}
+                </div>
+                <div style={{ flex: 1, minWidth: 120, fontSize: 12, color: "#8A93A6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {g.tags.join(", ")}
+                </div>
+                <div style={{ fontSize: 12.5, color: "#4B5563", fontFamily: "ui-monospace, monospace", whiteSpace: "nowrap" }}>
+                  {g.days}일 · 공수 <b style={{ color: "#14213D" }}>{g.units}</b>
+                </div>
+                <div className="no-print" style={{ display: "inline-flex", gap: 6 }} onClick={(e) => e.stopPropagation()}>
+                  <button
+                    onClick={() => { setPreset(viewMode === "person" ? { name: g.key } : { site: g.key === "(현장 미입력)" ? "" : g.key }); setShowForm(true); }}
+                    style={{ border: "1px solid #DADFE6", background: "#fff", borderRadius: 6, padding: "4px 9px", fontSize: 12, fontWeight: 700, color: "#FB8500", cursor: "pointer" }}
+                  >+ 기록</button>
+                  {!isMember && g.rows.length > 0 && (
+                    <button
+                      onClick={() => setBulkTarget({ label: `${g.key}의 ${monthLabel} 출근기록`, rows: g.rows })}
+                      style={{ border: "1px solid #DADFE6", background: "#fff", borderRadius: 6, padding: "4px 9px", fontSize: 12, fontWeight: 700, color: "#E63946", cursor: "pointer" }}
+                    >삭제</button>
+                  )}
+                </div>
+              </div>
+              {open && (
+                <div className="table-scroll" style={{ borderTop: "1px solid #EEF0F3" }}>
+                  {g.rows.length === 0 ? (
+                    <div style={{ padding: 16, fontSize: 12.5, color: "#A2A9B8", textAlign: "center" }}>이 달의 출근 기록이 없습니다.</div>
+                  ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr style={{ background: "#F7F8FA", color: "#6B7280" }}>
+                          <th style={th}>날짜</th><th style={th}>요일</th>
+                          {viewMode === "person" ? <th style={th}>현장</th> : <><th style={th}>이름</th><th style={th}>직책</th></>}
+                          <th style={{ ...th, textAlign: "right" }}>공수</th>
+                          <th style={th}>비고</th>
+                          <th className="no-print" style={{ ...th, textAlign: "right" }}>작업</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {g.rows.map((a) => {
+                          const dow = new Date(a.workDate + "T00:00:00").getDay();
+                          return (
+                            <tr key={a.id} style={{ borderTop: "1px solid #F1F2F5" }}>
+                              <td style={{ ...td, fontFamily: "ui-monospace, monospace", whiteSpace: "nowrap" }}>{a.workDate}</td>
+                              <td style={{ ...td, color: dow === 0 ? "#E63946" : dow === 6 ? "#3B82F6" : "#6B7280" }}>{WEEKDAY_KR[dow]}</td>
+                              {viewMode === "person" ? (
+                                <td style={td}>
+                                  {a.site || "-"}
+                                  {hasPending(a.id) && <span className="no-print" style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 999, fontSize: 9.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>승인대기</span>}
+                                </td>
+                              ) : (
+                                <>
+                                  <td style={{ ...td, fontWeight: 700, color: "#14213D", whiteSpace: "nowrap" }}>
+                                    {a.staffName}
+                                    {hasPending(a.id) && <span className="no-print" style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 999, fontSize: 9.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>승인대기</span>}
+                                  </td>
+                                  <td style={{ ...td, color: "#6B7280" }}>{positionOf(a.staffName) || "-"}</td>
+                                </>
+                              )}
+                              <td style={{ ...td, textAlign: "right", fontFamily: "ui-monospace, monospace" }}>{a.workUnit}</td>
+                              <td style={{ ...td, color: "#6B7280" }}>{a.note || ""}</td>
+                              <td className="no-print" style={{ ...td, textAlign: "right" }}>
+                                <div style={{ display: "inline-flex", gap: 6 }}>
+                                  <IconBtn title={isMember ? "수정 요청" : "수정"} color="#6B7280" onClick={() => setEditRow(a)}><Edit2 size={14} /></IconBtn>
+                                  <IconBtn title={isMember ? "삭제 요청" : "삭제"} color="#6B7280" onClick={() => setDeleteTarget(a)}><Trash2 size={14} /></IconBtn>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 40, padding: "6px 6px 0", fontSize: 12.5, color: "#6B7280" }}>
           <span>작성자: ____________</span>
@@ -4448,7 +4579,16 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], role, us
         </div>
       </div>
 
-      {showForm && <AttendanceFormModal staff={staff} siteOptions={siteOptions} onSave={saveRecords} onClose={() => setShowForm(false)} />}
+      {showForm && <AttendanceFormModal staff={staff} siteOptions={siteOptions} preset={preset} onSave={saveRecords} onClose={() => { setShowForm(false); setPreset(null); }} />}
+      {showStaffForm && <StaffAddModal onSave={addStaff} onClose={() => setShowStaffForm(false)} />}
+      {bulkTarget && (
+        <ConfirmDialog
+          text={`${bulkTarget.label} ${bulkTarget.rows.length}건을 모두 삭제하시겠습니까? 되돌릴 수 없습니다.`}
+          confirmLabel="전체 삭제"
+          onConfirm={() => deleteMany(bulkTarget.rows)}
+          onClose={() => setBulkTarget(null)}
+        />
+      )}
       {editRow && <AttendanceFormModal staff={staff} siteOptions={siteOptions} initial={editRow} onSave={saveRecords} onClose={() => setEditRow(null)} />}
       {deleteTarget && (
         <ConfirmDialog
@@ -4950,7 +5090,7 @@ export default function App() {
           ) : tab === "attendance" ? (
             <AttendanceTab
               attendance={attendance} setAttendance={setAttendance}
-              events={events} staff={staff}
+              events={events} staff={staff} setStaff={setStaff}
               role={role} username={authUser.username}
               pending={pending} setPending={setPending}
             />
