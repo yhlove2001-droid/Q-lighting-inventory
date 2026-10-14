@@ -7,7 +7,7 @@ import {
   Printer, FileDown, Users, ChevronDown, UserPlus
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import * as XLSX from "xlsx";
+import XLSX from "xlsx-js-style"; // xlsx와 동일 API + 셀 서식(색/테두리/병합) 지원
 import { supabase, usernameToEmail } from "./supabaseClient";
 import {
   fetchMyProfile, fetchAllProfiles, approveProfile, rejectProfile,
@@ -4141,6 +4141,158 @@ function AttendanceFormModal({ staff, siteOptions, initial, preset, onSave, onCl
   );
 }
 
+// ---------- 현장별 엑셀 (증빙자료용 서식) ----------
+const XL_FONT = "맑은 고딕";
+const XL_BORDER = { style: "thin", color: { rgb: "B8C0CC" } };
+const XL_BOX = { top: XL_BORDER, bottom: XL_BORDER, left: XL_BORDER, right: XL_BORDER };
+const XL = {
+  title: { font: { name: XL_FONT, sz: 18, bold: true, color: { rgb: "14213D" } }, alignment: { horizontal: "center", vertical: "center" } },
+  meta: { font: { name: XL_FONT, sz: 10.5, color: { rgb: "374151" } }, alignment: { vertical: "center" } },
+  metaBold: { font: { name: XL_FONT, sz: 10.5, bold: true, color: { rgb: "14213D" } }, alignment: { vertical: "center" } },
+  section: { font: { name: XL_FONT, sz: 12, bold: true, color: { rgb: "14213D" } }, alignment: { vertical: "center" }, border: { bottom: { style: "medium", color: { rgb: "14213D" } } } },
+  head: { font: { name: XL_FONT, sz: 10.5, bold: true, color: { rgb: "FFFFFF" } }, fill: { patternType: "solid", fgColor: { rgb: "14213D" } }, alignment: { horizontal: "center", vertical: "center", wrapText: true }, border: XL_BOX },
+  cell: (opt = {}) => ({
+    font: { name: XL_FONT, sz: 10.5, bold: !!opt.bold, color: { rgb: opt.color || "1F2937" } },
+    fill: opt.fill ? { patternType: "solid", fgColor: { rgb: opt.fill } } : undefined,
+    alignment: { horizontal: opt.h || "left", vertical: "center", wrapText: !!opt.wrap },
+    border: XL_BOX,
+  }),
+};
+
+function xlSafeSheetName(name, used) {
+  const base = (name || "현장").replace(/[\\/?*[\]:]/g, "").trim().slice(0, 28) || "현장";
+  let n = base, i = 2;
+  while (used.has(n)) n = `${base.slice(0, 25)}(${i++})`;
+  used.add(n);
+  return n;
+}
+
+// 한 현장의 출근기록 -> 서식이 적용된 시트 (제목 / 현장·기간 / 인원별 요약 / 일자별 상세 / 서명란)
+function buildSiteSheet(siteName, rows, positionOf) {
+  const ws = {};
+  const merges = [];
+  const rowH = [];
+  const COLS = 6; // A 날짜 · B 요일 · C 이름 · D 직책 · E 공수 · F 비고
+  const set = (r, c, v, style) => {
+    const cell = { v: v === undefined || v === null ? "" : v, t: typeof v === "number" ? "n" : "s" };
+    if (style) cell.s = style;
+    ws[XLSX.utils.encode_cell({ r, c })] = cell;
+  };
+  const merge = (r, c1, c2, r2 = r) => merges.push({ s: { r, c: c1 }, e: { r: r2, c: c2 } });
+  const fillRow = (r, c1, c2, style) => { for (let c = c1; c <= c2; c++) if (!ws[XLSX.utils.encode_cell({ r, c })]) set(r, c, "", style); };
+  const round = (n) => Math.round(n * 100) / 100;
+
+  const sorted = rows.slice().sort((a, b) => a.workDate.localeCompare(b.workDate) || a.staffName.localeCompare(b.staffName));
+  const dates = sorted.map((x) => x.workDate);
+  const from = dates[0] || "", to = dates[dates.length - 1] || "";
+  const person = {};
+  for (const x of sorted) {
+    const p = (person[x.staffName] = person[x.staffName] || { days: new Set(), units: 0 });
+    p.days.add(x.workDate); p.units += x.workUnit;
+  }
+  const names = Object.keys(person).sort();
+  const totalUnits = round(sorted.reduce((t, x) => t + x.workUnit, 0));
+  const dayCount = new Set(dates).size;
+  const today = new Date();
+  const todayLabel = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+
+  let r = 0;
+  set(r, 0, "인원관리대장 (출근기록부)", XL.title); fillRow(r, 0, COLS - 1, XL.title); merge(r, 0, COLS - 1); rowH[r] = 34; r++;
+  r++;
+  set(r, 0, "현 장 명", XL.metaBold); set(r, 1, siteName, XL.metaBold); fillRow(r, 1, COLS - 1, XL.metaBold); merge(r, 1, COLS - 1); rowH[r] = 20; r++;
+  set(r, 0, "기    간", XL.metaBold); set(r, 1, from ? `${from} ~ ${to}  (출근일 ${dayCount}일)` : "-", XL.meta); fillRow(r, 1, COLS - 1, XL.meta); merge(r, 1, COLS - 1); rowH[r] = 20; r++;
+  set(r, 0, "출 력 일", XL.metaBold); set(r, 1, todayLabel, XL.meta); fillRow(r, 1, COLS - 1, XL.meta); merge(r, 1, COLS - 1); rowH[r] = 20; r++;
+  r++;
+
+  // 1. 인원별 투입 현황
+  set(r, 0, "1. 인원별 투입 현황", XL.section); fillRow(r, 0, COLS - 1, XL.section); merge(r, 0, COLS - 1); rowH[r] = 22; r++;
+  ["이름", "직책", "출근일수", "총 공수", "투입 기간", ""].forEach((h, c) => set(r, c, h, XL.head)); merge(r, 4, 5); rowH[r] = 22; r++;
+  names.forEach((n, i) => {
+    const fill = i % 2 ? "F5F7FA" : undefined;
+    const ds = Array.from(person[n].days).sort();
+    set(r, 0, n, XL.cell({ bold: true, fill })); set(r, 1, positionOf(n) || "-", XL.cell({ h: "center", fill }));
+    set(r, 2, ds.length, XL.cell({ h: "center", fill })); set(r, 3, round(person[n].units), XL.cell({ h: "center", fill, bold: true }));
+    set(r, 4, `${ds[0]} ~ ${ds[ds.length - 1]}`, XL.cell({ h: "center", fill })); set(r, 5, "", XL.cell({ fill })); merge(r, 4, 5);
+    rowH[r] = 20; r++;
+  });
+  const tot = { bold: true, fill: "E8ECF2" };
+  set(r, 0, "합 계", XL.cell({ ...tot, h: "center" })); set(r, 1, `${names.length}명`, XL.cell({ ...tot, h: "center" }));
+  set(r, 2, dayCount, XL.cell({ ...tot, h: "center" })); set(r, 3, totalUnits, XL.cell({ ...tot, h: "center" }));
+  set(r, 4, "", XL.cell(tot)); set(r, 5, "", XL.cell(tot)); merge(r, 4, 5); rowH[r] = 22; r++;
+  r++;
+
+  // 2. 일자별 출근 내역 (같은 날짜는 날짜·요일 칸을 세로로 병합, 날짜 묶음마다 배경색 번갈아)
+  set(r, 0, "2. 일자별 출근 내역", XL.section); fillRow(r, 0, COLS - 1, XL.section); merge(r, 0, COLS - 1); rowH[r] = 22; r++;
+  ["날짜", "요일", "이름", "직책", "공수", "비고"].forEach((h, c) => set(r, c, h, XL.head)); rowH[r] = 22; r++;
+  let i = 0, band = 0;
+  while (i < sorted.length) {
+    let j = i;
+    while (j < sorted.length && sorted[j].workDate === sorted[i].workDate) j++;
+    const d = sorted[i].workDate;
+    const dow = new Date(d + "T00:00:00").getDay();
+    const fill = band % 2 ? "F5F7FA" : undefined;
+    const dayColor = dow === 0 ? "D62839" : dow === 6 ? "2563EB" : "1F2937";
+    const startRow = r;
+    for (let k = i; k < j; k++) {
+      const x = sorted[k];
+      set(r, 0, k === i ? d : "", XL.cell({ h: "center", fill, bold: true }));
+      set(r, 1, k === i ? WEEKDAY_KR[dow] : "", XL.cell({ h: "center", fill, color: dayColor, bold: true }));
+      set(r, 2, x.staffName, XL.cell({ fill, bold: true })); set(r, 3, positionOf(x.staffName) || "-", XL.cell({ h: "center", fill }));
+      set(r, 4, x.workUnit, XL.cell({ h: "center", fill })); set(r, 5, x.note || "", XL.cell({ fill, wrap: true }));
+      rowH[r] = 19; r++;
+    }
+    if (j - i > 1) { merge(startRow, 0, 0, r - 1); merge(startRow, 1, 1, r - 1); }
+    i = j; band++;
+  }
+  if (sorted.length === 0) { set(r, 0, "기록 없음", XL.cell({ h: "center" })); fillRow(r, 1, COLS - 1, XL.cell({})); merge(r, 0, COLS - 1); r++; }
+  set(r, 0, "총 공수 합계", XL.cell({ ...tot, h: "center" })); fillRow(r, 1, 3, XL.cell(tot)); merge(r, 0, 3);
+  set(r, 4, totalUnits, XL.cell({ ...tot, h: "center" })); set(r, 5, "", XL.cell(tot)); rowH[r] = 22; r++;
+  r += 2;
+
+  // 서명란
+  const sign = { font: { name: XL_FONT, sz: 10.5, color: { rgb: "374151" } }, alignment: { horizontal: "right", vertical: "center" } };
+  set(r, 0, "작성자 :  ____________________        확인(관리자) :  ____________________  (인)", sign); fillRow(r, 1, COLS - 1, sign); merge(r, 0, COLS - 1); rowH[r] = 26; r++;
+
+  ws["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: r - 1, c: COLS - 1 } });
+  ws["!merges"] = merges;
+  ws["!cols"] = [{ wch: 13 }, { wch: 8 }, { wch: 13 }, { wch: 11 }, { wch: 10 }, { wch: 30 }];
+  ws["!rows"] = Array.from({ length: r }, (_, k) => (rowH[k] ? { hpt: rowH[k] } : {}));
+  ws["!margins"] = { left: 0.5, right: 0.5, top: 0.6, bottom: 0.6, header: 0.3, footer: 0.3 };
+  return ws;
+}
+
+// 여러 현장 -> 시트 1개/현장 (+ 2곳 이상이면 맨 앞에 현장별 요약 시트)
+function exportSiteWorkbook(sites, positionOf, filename) {
+  const wb = XLSX.utils.book_new();
+  const used = new Set();
+  if (sites.length > 1) {
+    const ws = {};
+    const set = (r, c, v, style) => { ws[XLSX.utils.encode_cell({ r, c })] = { v, t: typeof v === "number" ? "n" : "s", s: style }; };
+    set(0, 0, "현장별 인원 투입 요약", XL.title); for (let c = 1; c < 5; c++) set(0, c, "", XL.title);
+    ["현장명", "투입 기간", "투입 인원", "출근 연인원", "총 공수"].forEach((h, c) => set(2, c, h, XL.head));
+    let r = 3, totU = 0;
+    sites.forEach((st, i) => {
+      const fill = i % 2 ? "F5F7FA" : undefined;
+      const ds = st.rows.map((x) => x.workDate).sort();
+      const units = Math.round(st.rows.reduce((t, x) => t + x.workUnit, 0) * 100) / 100;
+      const people = new Set(st.rows.map((x) => x.staffName)).size;
+      set(r, 0, st.name, XL.cell({ bold: true, fill })); set(r, 1, ds.length ? `${ds[0]} ~ ${ds[ds.length - 1]}` : "-", XL.cell({ h: "center", fill }));
+      set(r, 2, people, XL.cell({ h: "center", fill })); set(r, 3, st.rows.length, XL.cell({ h: "center", fill })); set(r, 4, units, XL.cell({ h: "center", fill, bold: true }));
+      totU += units; r++;
+    });
+    const tot = { bold: true, fill: "E8ECF2" };
+    set(r, 0, "합 계", XL.cell({ ...tot, h: "center" })); set(r, 1, "", XL.cell(tot)); set(r, 2, "", XL.cell(tot));
+    set(r, 3, sites.reduce((t, st) => t + st.rows.length, 0), XL.cell({ ...tot, h: "center" })); set(r, 4, Math.round(totU * 100) / 100, XL.cell({ ...tot, h: "center" }));
+    ws["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r, c: 4 } });
+    ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }];
+    ws["!cols"] = [{ wch: 30 }, { wch: 25 }, { wch: 11 }, { wch: 13 }, { wch: 11 }];
+    ws["!rows"] = [{ hpt: 34 }, {}, { hpt: 22 }];
+    XLSX.utils.book_append_sheet(wb, ws, xlSafeSheetName("요약", used));
+  }
+  for (const st of sites) XLSX.utils.book_append_sheet(wb, buildSiteSheet(st.name, st.rows, positionOf), xlSafeSheetName(st.name, used));
+  XLSX.writeFile(wb, filename);
+}
+
 function GroupCalendar({ rows, year, month, mode, staff, onPickDate }) {
   // 한 인원(또는 한 현장)의 출근 기록을 월 달력으로 표시
   const byDate = {};
@@ -4321,7 +4473,6 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
   const [showStaffForm, setShowStaffForm] = useState(false);
   const [preset, setPreset] = useState(null);
   const [bulkTarget, setBulkTarget] = useState(null);
-  const isMember = role === "member";
 
   const year = cursor.getFullYear();
   const month = cursor.getMonth();
@@ -4330,9 +4481,6 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
 
   function positionOf(name) {
     return staff.find((s) => s.name === name)?.position || "";
-  }
-  function hasPending(id) {
-    return pending.some((p) => p.entity === "attendance" && p.targetId === id);
   }
   function weekdayOf(ds) {
     return WEEKDAY_KR[new Date(ds + "T00:00:00").getDay()];
@@ -4393,18 +4541,9 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
     if (!trimmed) return;
     if (staff.some((s) => s.name === trimmed)) { setNotice(`'${trimmed}' 님은 이미 등록되어 있습니다.`); setShowStaffForm(false); return; }
     try {
-      if (isMember) {
-        const created = await insertPending({
-          entity: "staff", action: "create", targetId: null, payload: { name: trimmed, position: trimmedPos },
-          summary: `직원 '${trimmed}${trimmedPos ? " " + trimmedPos : ""}' 등록 요청`, requestedBy: username,
-        });
-        setPending([created, ...pending]);
-        setNotice("직원 등록 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
-      } else {
-        const created = await insertStaff({ name: trimmed, position: trimmedPos });
-        setStaff([...staff, created].sort((a, b) => a.name.localeCompare(b.name)));
-        setNotice(`'${trimmed}${trimmedPos ? " " + trimmedPos : ""}' 님이 추가되었습니다.`);
-      }
+      const created = await insertStaff({ name: trimmed, position: trimmedPos });
+      setStaff([...staff, created].sort((x, y) => x.name.localeCompare(y.name)));
+      setNotice(`'${trimmed}${trimmedPos ? " " + trimmedPos : ""}' 님이 추가되었습니다.`);
       setShowStaffForm(false);
     } catch (err) {
       setNotice(`직원 등록에 실패했습니다: ${err?.message || err}`);
@@ -4464,19 +4603,7 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
   async function saveRecords(records, editingId) {
     setBusy(true);
     try {
-      if (isMember) {
-        const newPending = [];
-        for (const rec of records) {
-          const created = await insertPending({
-            entity: "attendance", action: editingId ? "edit" : "create", targetId: editingId || null, payload: rec,
-            summary: `출근기록 ${editingId ? "수정" : "등록"} 요청 (${summaryText(rec)})`,
-            requestedBy: username,
-          });
-          newPending.push(created);
-        }
-        setPending([...newPending, ...pending]);
-        setNotice(`출근기록 ${editingId ? "수정" : "등록"} 요청 ${records.length}건이 접수되었습니다. 관리자 승인 후 반영됩니다.`);
-      } else if (editingId) {
+      if (editingId) {
         const updated = await updateAttendance(editingId, records[0]);
         setAttendance(attendance.map((a) => (a.id === editingId ? updated : a)));
         setNotice("출근기록이 수정되었습니다.");
@@ -4502,22 +4629,28 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
 
   async function deleteRecord(row) {
     try {
-      if (isMember) {
-        const created = await insertPending({
-          entity: "attendance", action: "delete", targetId: row.id, payload: null,
-          summary: `출근기록 삭제 요청 (${summaryText({ workDate: row.workDate, staffName: row.staffName, site: row.site })})`,
-          requestedBy: username,
-        });
-        setPending([created, ...pending]);
-        setNotice("출근기록 삭제 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
-      } else {
-        await deleteAttendanceRow(row.id);
-        setAttendance(attendance.filter((a) => a.id !== row.id));
-      }
+      await deleteAttendanceRow(row.id);
+      setAttendance(attendance.filter((a) => a.id !== row.id));
     } catch (err) {
       setNotice(`삭제 중 오류가 발생했습니다: ${err?.message || err}`);
     }
     setDeleteTarget(null);
+  }
+
+  const safeFile = (t) => (t || "현장").replace(/[\\/:*?"<>|]/g, "").trim();
+  // 현장 1곳: 이 현장의 전체 기간 기록
+  function exportOneSite(siteKey) {
+    const rows = attendance.filter((a) => (a.site || "(현장 미입력)") === siteKey);
+    const ds = rows.map((a) => a.workDate).sort();
+    exportSiteWorkbook([{ name: siteKey, rows }], positionOf, `인원관리대장_${safeFile(siteKey)}${ds.length ? `_${ds[0]}~${ds[ds.length - 1]}` : ""}.xlsx`);
+  }
+  // 이 달에 출근 기록이 있는 모든 현장 (시트 1개/현장)
+  function exportAllSitesMonth() {
+    const map = {};
+    for (const a of monthRows) { const k = a.site || "(현장 미입력)"; (map[k] = map[k] || []).push(a); }
+    const sites = Object.keys(map).sort((x, y) => x.localeCompare(y)).map((name) => ({ name, rows: map[name] }));
+    if (sites.length === 0) { setNotice("이 달에는 내보낼 출근 기록이 없습니다."); return; }
+    exportSiteWorkbook(sites, positionOf, `인원관리대장_현장별_${monthPrefix}.xlsx`);
   }
 
   function exportExcel() {
@@ -4607,10 +4740,13 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
         <GhostButton onClick={exportExcel} style={{ padding: "8px 12px", fontSize: 12.5 }}>
           <FileDown size={14} /> 엑셀로 저장
         </GhostButton>
+        <GhostButton onClick={exportAllSitesMonth} style={{ padding: "8px 12px", fontSize: 12.5 }}>
+          <FileDown size={14} /> 현장별 엑셀 ({month + 1}월)
+        </GhostButton>
         <GhostButton onClick={printNow} style={{ padding: "8px 12px", fontSize: 12.5 }}>
           <Printer size={14} /> 인쇄
         </GhostButton>
-        {!isMember && monthRows.length > 0 && (
+        {monthRows.length > 0 && (
           <GhostButton onClick={() => setBulkTarget({ label: `${monthLabel} 출근기록 전체`, rows: monthRows })}
             style={{ padding: "8px 12px", fontSize: 12.5, borderColor: "#E63946", color: "#E63946" }}>
             <Trash2 size={14} /> {month + 1}월 전체 삭제
@@ -4661,7 +4797,14 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
                     onClick={() => { setPreset(viewMode === "person" ? { name: g.key } : { site: g.key === "(현장 미입력)" ? "" : g.key }); setShowForm(true); }}
                     style={{ border: "1px solid #DADFE6", background: "#fff", borderRadius: 6, padding: "4px 9px", fontSize: 12, fontWeight: 700, color: "#FB8500", cursor: "pointer" }}
                   >+ 기록</button>
-                  {!isMember && g.rows.length > 0 && (
+                  {viewMode === "site" && g.rows.length > 0 && (
+                    <button
+                      onClick={() => exportOneSite(g.key)}
+                      title="이 현장의 전체 기간 출근기록을 엑셀로 저장"
+                      style={{ border: "1px solid #DADFE6", background: "#fff", borderRadius: 6, padding: "4px 9px", fontSize: 12, fontWeight: 700, color: "#0F766E", cursor: "pointer" }}
+                    >엑셀</button>
+                  )}
+                  {g.rows.length > 0 && (
                     <button
                       onClick={() => setBulkTarget({ label: `${g.key}의 ${monthLabel} 출근기록`, rows: g.rows })}
                       style={{ border: "1px solid #DADFE6", background: "#fff", borderRadius: 6, padding: "4px 9px", fontSize: 12, fontWeight: 700, color: "#E63946", cursor: "pointer" }}
@@ -4699,13 +4842,11 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
                               {viewMode === "person" ? (
                                 <td style={td}>
                                   {a.site || "-"}
-                                  {hasPending(a.id) && <span className="no-print" style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 999, fontSize: 9.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>승인대기</span>}
                                 </td>
                               ) : (
                                 <>
                                   <td style={{ ...td, fontWeight: 700, color: "#14213D", whiteSpace: "nowrap" }}>
                                     {a.staffName}
-                                    {hasPending(a.id) && <span className="no-print" style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 999, fontSize: 9.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>승인대기</span>}
                                   </td>
                                   <td style={{ ...td, color: "#6B7280" }}>{positionOf(a.staffName) || "-"}</td>
                                 </>
@@ -4714,8 +4855,8 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
                               <td style={{ ...td, color: "#6B7280" }}>{a.note || ""}</td>
                               <td className="no-print" style={{ ...td, textAlign: "right" }}>
                                 <div style={{ display: "inline-flex", gap: 6 }}>
-                                  <IconBtn title={isMember ? "수정 요청" : "수정"} color="#6B7280" onClick={() => setEditRow(a)}><Edit2 size={14} /></IconBtn>
-                                  <IconBtn title={isMember ? "삭제 요청" : "삭제"} color="#6B7280" onClick={() => setDeleteTarget(a)}><Trash2 size={14} /></IconBtn>
+                                  <IconBtn title="수정" color="#6B7280" onClick={() => setEditRow(a)}><Edit2 size={14} /></IconBtn>
+                                  <IconBtn title="삭제" color="#6B7280" onClick={() => setDeleteTarget(a)}><Trash2 size={14} /></IconBtn>
                                 </div>
                               </td>
                             </tr>
@@ -4749,9 +4890,7 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
       {editRow && <AttendanceFormModal staff={staff} siteOptions={siteOptions} initial={editRow} onSave={saveRecords} onClose={() => setEditRow(null)} />}
       {deleteTarget && (
         <ConfirmDialog
-          text={isMember
-            ? `${deleteTarget.workDate} ${deleteTarget.staffName}의 출근기록 삭제를 관리자에게 요청하시겠습니까?`
-            : `${deleteTarget.workDate} ${deleteTarget.staffName}의 출근기록을 삭제하시겠습니까?`}
+          text={`${deleteTarget.workDate} ${deleteTarget.staffName}의 출근기록을 삭제하시겠습니까?`}
           onConfirm={() => deleteRecord(deleteTarget)}
           onClose={() => setDeleteTarget(null)}
         />
