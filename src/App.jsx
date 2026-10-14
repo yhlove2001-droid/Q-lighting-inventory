@@ -42,8 +42,12 @@ const LOGO_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA28AAADeCAY
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
+// 로컬(한국 시간) 기준 YYYY-MM-DD. toISOString()은 UTC라서 한국에서는 하루씩 어긋나므로 사용하지 않음.
+function localDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  return localDateStr(new Date());
 }
 function isFutureDate(dateStr) {
   return dateStr > todayStr();
@@ -60,7 +64,7 @@ function eachDateInRange(startStr, endStr) {
   const end = new Date(endStr + "T00:00:00");
   let guard = 0;
   while (cur <= end && guard < 366) {
-    dates.push(cur.toISOString().slice(0, 10));
+    dates.push(localDateStr(cur));
     cur.setDate(cur.getDate() + 1);
     guard++;
   }
