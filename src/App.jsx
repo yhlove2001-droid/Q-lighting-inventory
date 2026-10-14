@@ -4141,6 +4141,84 @@ function AttendanceFormModal({ staff, siteOptions, initial, preset, onSave, onCl
   );
 }
 
+function SiteCompact({ rows, positionOf }) {
+  // 현장 하나의 기록을 "날짜별 한 줄"로 압축 + 인원별 합계 요약
+  const byDate = {};
+  const byPerson = {};
+  for (const r of rows) {
+    (byDate[r.workDate] = byDate[r.workDate] || []).push(r);
+    const p = (byPerson[r.staffName] = byPerson[r.staffName] || { days: new Set(), units: 0 });
+    p.days.add(r.workDate); p.units += r.workUnit;
+  }
+  const dates = Object.keys(byDate).sort();
+  const people = Object.keys(byPerson).sort();
+  // 같은 인원 구성이 이어지는 날짜를 하나의 구간으로 묶기 (사이가 토·일뿐이면 이어서 묶음)
+  const sigOf = (d) => byDate[d].map((r) => r.staffName + "|" + r.workUnit + "|" + (r.note || "")).sort().join(",");
+  const onlyWeekendBetween = (d1, d2) => {
+    const t = new Date(d1 + "T00:00:00");
+    for (t.setDate(t.getDate() + 1); ; t.setDate(t.getDate() + 1)) {
+      const ds = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+      if (ds >= d2) return true;
+      if (t.getDay() !== 0 && t.getDay() !== 6) return false;
+    }
+  };
+  const runs = [];
+  for (const d of dates) {
+    const prev = runs[runs.length - 1];
+    const prevLast = prev && prev.dates[prev.dates.length - 1];
+    if (prev && prev.sig === sigOf(d) && onlyWeekendBetween(prevLast, d)) prev.dates.push(d);
+    else runs.push({ sig: sigOf(d), dates: [d], list: byDate[d].slice().sort((a, b) => a.staffName.localeCompare(b.staffName)) });
+  }
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "10px 14px", background: "#FAFBFC", borderBottom: "1px solid #F1F2F5" }}>
+        {people.map((n) => (
+          <span key={n} style={{ padding: "3px 9px", borderRadius: 999, background: "#fff", border: "1px solid #E3E7ED", fontSize: 12, color: "#4B5563" }}>
+            <b style={{ color: "#14213D" }}>{n}</b>{positionOf(n) ? ` ${positionOf(n)}` : ""} · {byPerson[n].days.size}일 · 공수 {Math.round(byPerson[n].units * 100) / 100}
+          </span>
+        ))}
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <tbody>
+          {runs.map((run) => {
+            const first = run.dates[0], last = run.dates[run.dates.length - 1];
+            const dowOf = (d) => new Date(d + "T00:00:00").getDay();
+            const sum = Math.round(run.list.reduce((t, r) => t + r.workUnit, 0) * run.dates.length * 100) / 100;
+            return (
+              <tr key={first} style={{ borderTop: "1px solid #F1F2F5" }}>
+                <td style={{ padding: "7px 12px", fontSize: 12.5, fontFamily: "ui-monospace, monospace", whiteSpace: "nowrap", verticalAlign: "top" }}>
+                  {first.slice(5)}<span style={{ color: "#8A93A6" }}>({WEEKDAY_KR[dowOf(first)]})</span>
+                  {last !== first && <> ~ {last.slice(5)}<span style={{ color: "#8A93A6" }}>({WEEKDAY_KR[dowOf(last)]})</span></>}
+                </td>
+                <td style={{ padding: "6px 8px", fontSize: 12, color: "#6B7280", whiteSpace: "nowrap", verticalAlign: "top" }}>{run.dates.length}일</td>
+                <td style={{ padding: "5px 8px" }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                    {run.list.map((r) => (
+                      <span key={r.staffName + r.workUnit + r.note} style={{
+                        padding: "2px 9px", borderRadius: 999, fontSize: 12, fontWeight: 700, color: "#14213D",
+                        background: r.workUnit === 1 ? "#F1F5F9" : "#FFF3E6",
+                      }}>
+                        {r.staffName}{r.workUnit !== 1 ? <span style={{ color: "#FB8500" }}> {r.workUnit}</span> : ""}
+                        {r.note ? <span style={{ color: "#8A93A6", fontWeight: 500 }}> ({r.note})</span> : ""}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td style={{ padding: "6px 12px", fontSize: 12, color: "#6B7280", textAlign: "right", whiteSpace: "nowrap", verticalAlign: "top", fontFamily: "ui-monospace, monospace" }}>
+                  {run.list.length}명 · 공수 {sum}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div className="no-print" style={{ padding: "7px 14px", fontSize: 11.5, color: "#A2A9B8", borderTop: "1px solid #F1F2F5" }}>
+        같은 인원이 연속(주말 건너뜀 포함)으로 나간 날짜는 한 줄로 묶었습니다. 수정·삭제는 상단 "자세히(표)"를 체크하세요.
+      </div>
+    </div>
+  );
+}
+
 function StaffAddModal({ onSave, onClose }) {
   const [name, setName] = useState("");
   const [position, setPosition] = useState("");
@@ -4180,6 +4258,7 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
   const [viewMode, setViewMode] = useState("person"); // person | site
   const [openGroups, setOpenGroups] = useState({});
   const [expandAll, setExpandAll] = useState(false);
+  const [siteDetail, setSiteDetail] = useState(false); // 현장별 보기: 자세히(표) / 간단히(날짜별 한 줄)
   const [showStaffForm, setShowStaffForm] = useState(false);
   const [preset, setPreset] = useState(null);
   const [bulkTarget, setBulkTarget] = useState(null);
@@ -4438,6 +4517,12 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
             }}>{label}</button>
           ))}
         </div>
+        {viewMode === "site" && (
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, color: "#6B7280", cursor: "pointer" }}>
+            <input type="checkbox" checked={siteDetail} onChange={(e) => setSiteDetail(e.target.checked)} style={{ width: 14, height: 14 }} />
+            자세히(표)
+          </label>
+        )}
         <div style={{ flex: 1 }} />
         <GhostButton
           onClick={importFromCalendar}
@@ -4521,6 +4606,8 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
                 <div className="table-scroll" style={{ borderTop: "1px solid #EEF0F3" }}>
                   {g.rows.length === 0 ? (
                     <div style={{ padding: 16, fontSize: 12.5, color: "#A2A9B8", textAlign: "center" }}>이 달의 출근 기록이 없습니다.</div>
+                  ) : viewMode === "site" && !siteDetail ? (
+                    <SiteCompact rows={g.rows} positionOf={positionOf} />
                   ) : (
                     <table style={{ width: "100%", borderCollapse: "collapse" }}>
                       <thead>
