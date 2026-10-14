@@ -1050,7 +1050,7 @@ function InventoryTab({ items, setItems, transactions, setTransactions, vendors,
   const [auditOnlyDiff, setAuditOnlyDiff] = useState(false);
   const [auditApplying, setAuditApplying] = useState(false);
 
-  const isMember = role === "member";
+  const isMember = false; // 일반 회원도 승인 없이 바로 변경 (변경 요청 승인 절차 사용 안 함)
 
   const stockByItem = useMemo(() => computeStockByItem(transactions), [transactions]);
   const lastDates = useMemo(() => computeLastDates(transactions), [transactions]);
@@ -2242,7 +2242,7 @@ function VendorsTab({ vendors, setVendors, role, username, pending, setPending }
   const [editVendor, setEditVendor] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [notice, setNotice] = useState("");
-  const isMember = role === "member";
+  const isMember = false; // 일반 회원도 승인 없이 바로 변경 (변경 요청 승인 절차 사용 안 함)
 
   const filtered = vendors.filter((v) => v.name.toLowerCase().includes(search.toLowerCase()));
 
@@ -2516,7 +2516,7 @@ function ProjectsTab({ projects, setProjects, items, transactions, setTransactio
   const [applying, setApplying] = useState(null);
   const [notice, setNotice] = useState("");
   const [expandedIds, setExpandedIds] = useState(new Set());
-  const isMember = role === "member";
+  const isMember = false; // 일반 회원도 승인 없이 바로 변경 (변경 요청 승인 절차 사용 안 함)
 
   const filteredProjects = useMemo(() => {
     return projects
@@ -3485,7 +3485,7 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
   const [viewMode, setViewMode] = useState("calendar"); // "calendar" | "staff"
   const [newStaffName, setNewStaffName] = useState("");
   const [newStaffPosition, setNewStaffPosition] = useState("");
-  const isMember = role === "member";
+  const isMember = false; // 일반 회원도 승인 없이 바로 변경 (변경 요청 승인 절차 사용 안 함)
 
   const year = cursor.getFullYear();
   const month = cursor.getMonth();
