@@ -18,7 +18,7 @@ import {
   fetchProjects, insertProject, updateProject, deleteProjectRow,
   fetchIncomingRequests, insertIncomingRequest, updateIncomingRequest, deleteIncomingRequestRow,
   fetchStaff, insertStaff, updateStaff, deleteStaffRow,
-  fetchAttendance, insertAttendanceMany, updateAttendance, deleteAttendanceRow, deleteAttendanceMany, renameAttendanceStaff, fetchActivityLog,
+  fetchAttendance, insertAttendanceMany, updateAttendance, deleteAttendanceRow, deleteAttendanceMany, renameAttendanceStaff, fetchActivityLog, updateProfileName, deleteMemberAccount,
   fetchPending, insertPending, deletePendingRow,
 } from "./api";
 
@@ -351,6 +351,7 @@ function LoginScreen({ onLogin }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const [suName, setSuName] = useState("");
   const [suId, setSuId] = useState("");
   const [suPw, setSuPw] = useState("");
   const [suPw2, setSuPw2] = useState("");
@@ -391,6 +392,11 @@ function LoginScreen({ onLogin }) {
 
   async function submitSignup() {
     const uTrim = suId.trim();
+    const nameTrim = suName.trim();
+    if (!nameTrim) {
+      setSuError("이름을 입력해주세요.");
+      return;
+    }
     if (!uTrim || !suPw) {
       setSuError("아이디와 비밀번호를 입력해주세요.");
       return;
@@ -409,7 +415,7 @@ function LoginScreen({ onLogin }) {
     const { error: signUpError } = await supabase.auth.signUp({
       email,
       password: suPw,
-      options: { data: { username: uTrim } },
+      options: { data: { username: uTrim, full_name: nameTrim } },
     });
     setSuBusy(false);
     if (signUpError) {
@@ -430,7 +436,7 @@ function LoginScreen({ onLogin }) {
   }
 
   function resetSignup() {
-    setSuId(""); setSuPw(""); setSuPw2(""); setSuError(""); setSuDone(false);
+    setSuName(""); setSuId(""); setSuPw(""); setSuPw2(""); setSuError(""); setSuDone(false);
   }
 
   return (
@@ -496,8 +502,11 @@ function LoginScreen({ onLogin }) {
           </div>
         ) : (
           <div onKeyDown={handleSignupKeyDown} style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 14 }}>
+            <Field label="이름" required>
+              <TextInput value={suName} onChange={(e) => setSuName(e.target.value)} placeholder="본인 실명 (예: 홍길동)" autoFocus style={{ width: "100%", boxSizing: "border-box" }} />
+            </Field>
             <Field label="아이디" required>
-              <TextInput value={suId} onChange={(e) => setSuId(e.target.value)} placeholder="사용할 아이디" autoFocus style={{ width: "100%", boxSizing: "border-box" }} />
+              <TextInput value={suId} onChange={(e) => setSuId(e.target.value)} placeholder="사용할 아이디" style={{ width: "100%", boxSizing: "border-box" }} />
             </Field>
             <Field label="비밀번호" required>
               <TextInput type="password" value={suPw} onChange={(e) => setSuPw(e.target.value)} placeholder="6자 이상" style={{ width: "100%", boxSizing: "border-box" }} />
@@ -5030,6 +5039,31 @@ function AdminTab({
 }) {
   const pendingUsers = users.filter((u) => u.status === "pending");
   const approvedUsers = users.filter((u) => u.status === "approved");
+  const [nameEdit, setNameEdit] = useState(null); // { id, value }
+  const [removeTarget, setRemoveTarget] = useState(null);
+  const [userNotice, setUserNotice] = useState("");
+
+  async function saveMemberName() {
+    if (!nameEdit) return;
+    try {
+      const v = nameEdit.value.trim();
+      await updateProfileName(nameEdit.id, v);
+      setUsers(users.map((u) => (u.id === nameEdit.id ? { ...u, full_name: v || null } : u)));
+      setNameEdit(null);
+    } catch (err) {
+      setUserNotice("이름 저장에 실패했습니다. supabase_schema_member_name.sql을 실행했는지 확인해주세요.");
+    }
+  }
+  async function removeMember(u) {
+    try {
+      await deleteMemberAccount(u.id);
+      setUsers(users.filter((x) => x.id !== u.id));
+      setUserNotice(`'${u.username}' 회원을 탈퇴 처리했습니다.`);
+    } catch (err) {
+      setUserNotice(`탈퇴 처리에 실패했습니다: ${err?.message || err}`);
+    }
+    setRemoveTarget(null);
+  }
 
   // 변경 기록 (누가 언제 무엇을 바꿨는지)
   const [logs, setLogs] = useState([]);
@@ -5311,7 +5345,7 @@ function AdminTab({
             {pendingUsers.map((u) => (
               <div key={u.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 18px", borderTop: "1px solid #F1F2F5" }}>
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: 13.5, color: "#14213D" }}>{u.username}</div>
+                  <div style={{ fontWeight: 700, fontSize: 13.5, color: "#14213D" }}>{u.username}{u.full_name ? <span style={{ marginLeft: 6, fontWeight: 600, color: "#6B7280" }}>({u.full_name})</span> : null}</div>
                   <div style={{ fontSize: 11.5, color: "#A2A9B8" }}>신청일 {u.created_at?.slice(0, 10)}</div>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
@@ -5332,6 +5366,20 @@ function AdminTab({
         <div style={{ padding: "14px 18px", borderBottom: "1px solid #EEF0F3", fontWeight: 800, fontSize: 14, color: "#14213D", display: "flex", alignItems: "center", gap: 8 }}>
           <Users size={16} color="#FB8500" /> 가입된 회원 ({approvedUsers.length}명)
         </div>
+        {userNotice && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#EAF1FE", color: "#2554A8", padding: "8px 18px", fontSize: 12.5, fontWeight: 600 }}>
+            <span>{userNotice}</span>
+            <button onClick={() => setUserNotice("")} style={{ border: "none", background: "none", cursor: "pointer", color: "#2554A8" }}><X size={14} /></button>
+          </div>
+        )}
+        {removeTarget && (
+          <ConfirmDialog
+            text={`'${removeTarget.username}'${removeTarget.full_name ? ` (${removeTarget.full_name})` : ""} 회원을 탈퇴시키겠습니까? 로그인 계정이 삭제되며 되돌릴 수 없습니다. (이 회원이 입력한 데이터는 그대로 남습니다)`}
+            confirmLabel="탈퇴"
+            onConfirm={() => removeMember(removeTarget)}
+            onClose={() => setRemoveTarget(null)}
+          />
+        )}
         {approvedUsers.length === 0 ? (
           <div style={{ padding: 24, textAlign: "center", color: "#A2A9B8", fontSize: 13 }}>승인된 회원이 없습니다.</div>
         ) : (
@@ -5340,20 +5388,43 @@ function AdminTab({
               <thead>
                 <tr style={{ background: "#F7F8FA", color: "#6B7280", fontSize: 12 }}>
                   <th style={{ padding: "9px 18px", textAlign: "left" }}>아이디</th>
+                  <th style={{ padding: "9px 12px", textAlign: "left" }}>이름</th>
                   <th style={{ padding: "9px 12px", textAlign: "left" }}>구분</th>
                   <th style={{ padding: "9px 12px", textAlign: "left" }}>가입일</th>
+                  <th style={{ padding: "9px 18px", textAlign: "right" }}>관리</th>
                 </tr>
               </thead>
               <tbody>
                 {approvedUsers.map((u) => (
                   <tr key={u.id} style={{ borderTop: "1px solid #F1F2F5", fontSize: 13 }}>
                     <td style={{ padding: "9px 18px", fontWeight: 700, color: "#14213D" }}>{u.username}</td>
+                    <td style={{ padding: "9px 12px", color: "#374151" }}>
+                      {nameEdit && nameEdit.id === u.id ? (
+                        <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                          <TextInput value={nameEdit.value} onChange={(e) => setNameEdit({ ...nameEdit, value: e.target.value })}
+                            onKeyDown={(e) => { if (e.key === "Enter") saveMemberName(); }} autoFocus
+                            style={{ padding: "4px 8px", fontSize: 12.5, width: 110 }} />
+                          <button onClick={saveMemberName} style={{ border: "none", background: "none", color: "#2563EB", fontWeight: 700, cursor: "pointer", fontSize: 12 }}>저장</button>
+                          <button onClick={() => setNameEdit(null)} style={{ border: "none", background: "none", color: "#8A93A6", cursor: "pointer", fontSize: 12 }}>취소</button>
+                        </span>
+                      ) : (
+                        <span>
+                          {u.full_name || <span style={{ color: "#C0C6D2" }}>(미입력)</span>}
+                          <button onClick={() => setNameEdit({ id: u.id, value: u.full_name || "" })} style={{ marginLeft: 8, border: "none", background: "none", color: "#8A93A6", cursor: "pointer", fontSize: 11.5 }}>수정</button>
+                        </span>
+                      )}
+                    </td>
                     <td style={{ padding: "9px 12px" }}>
                       <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: u.role === "admin" ? "#FFF3E6" : "#EAF1FE", color: u.role === "admin" ? "#FB8500" : "#2563EB" }}>
                         {u.role === "admin" ? "관리자" : "일반회원"}
                       </span>
                     </td>
                     <td style={{ padding: "9px 12px", color: "#6B7280" }}>{u.created_at?.slice(0, 10)}</td>
+                    <td style={{ padding: "9px 18px", textAlign: "right" }}>
+                      {u.role !== "admin" && (
+                        <button onClick={() => setRemoveTarget(u)} style={{ border: "1px solid #F3D2D5", background: "#fff", color: "#E63946", borderRadius: 6, padding: "3px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>탈퇴</button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -5384,7 +5455,7 @@ function AdminTab({
           </div>
         ) : filteredLogs.length === 0 ? (
           <div style={{ padding: 24, textAlign: "center", color: "#A2A9B8", fontSize: 13 }}>
-            {logLoading ? "불러오는 중..." : "기록이 없습니다. (SQL 실행 이후의 변경부터 기록됩니다)"}
+            {logLoading ? "불러오는 중..." : "기록이 없습니다."}
           </div>
         ) : (
           <div className="table-scroll">

@@ -341,3 +341,14 @@ export async function fetchActivityLog(limit = 300) {
   if (error) throw error;
   return data || [];
 }
+
+// ---------- 회원 관리 (관리자) ----------
+export async function updateProfileName(id, fullName) {
+  const { error } = await supabase.from("profiles").update({ full_name: fullName || null }).eq("id", id);
+  if (error) throw error;
+}
+// 회원 탈퇴(계정 삭제): 로그인 계정과 프로필을 함께 삭제 (DB 함수 admin_delete_user 사용)
+export async function deleteMemberAccount(id) {
+  const { error } = await supabase.rpc("admin_delete_user", { target: id });
+  if (error) throw error;
+}
