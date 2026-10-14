@@ -277,3 +277,42 @@ export async function deletePendingRow(id) {
   const { error } = await supabase.from("pending_changes").delete().eq("id", id);
   if (error) throw error;
 }
+
+// ---------- attendance (인원관리대장 / 출근기록부) ----------
+function rowToAttendance(r) {
+  return {
+    id: r.id, workDate: r.work_date, staffName: r.staff_name, site: r.site || "",
+    workUnit: r.work_unit != null ? Number(r.work_unit) : 1, note: r.note || "",
+    source: r.source || "manual", createdAt: r.created_at,
+  };
+}
+export async function fetchAttendance() {
+  const { data, error } = await supabase.from("attendance").select("*").order("work_date", { ascending: true });
+  if (error) { console.error(error); return []; }
+  return data.map(rowToAttendance);
+}
+function attendanceToRow(a) {
+  return {
+    work_date: a.workDate, staff_name: a.staffName, site: (a.site || "").trim(),
+    work_unit: a.workUnit != null ? a.workUnit : 1, note: a.note || null, source: a.source || "manual",
+  };
+}
+// 같은 날짜·직원·현장 기록이 이미 있으면 건너뛰고, 새로 등록된 행만 돌려줍니다.
+export async function insertAttendanceMany(list) {
+  if (!list || list.length === 0) return [];
+  const { data, error } = await supabase
+    .from("attendance")
+    .upsert(list.map(attendanceToRow), { onConflict: "work_date,staff_name,site", ignoreDuplicates: true })
+    .select();
+  if (error) throw error;
+  return (data || []).map(rowToAttendance);
+}
+export async function updateAttendance(id, a) {
+  const { data, error } = await supabase.from("attendance").update(attendanceToRow(a)).eq("id", id).select().single();
+  if (error) throw error;
+  return rowToAttendance(data);
+}
+export async function deleteAttendanceRow(id) {
+  const { error } = await supabase.from("attendance").delete().eq("id", id);
+  if (error) throw error;
+}

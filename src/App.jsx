@@ -4,7 +4,7 @@ import {
   ArrowDownCircle, ArrowUpCircle, ChevronRight, ChevronLeft, Lock, User,
   ClipboardList, Truck, LayoutDashboard, CalendarDays, CalendarPlus,
   ShieldCheck, UserCheck, UserX, Check, Clock, RefreshCw, FolderKanban,
-  Printer, FileDown
+  Printer, FileDown, Users
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import * as XLSX from "xlsx";
@@ -18,6 +18,7 @@ import {
   fetchProjects, insertProject, updateProject, deleteProjectRow,
   fetchIncomingRequests, insertIncomingRequest, updateIncomingRequest, deleteIncomingRequestRow,
   fetchStaff, insertStaff, updateStaff, deleteStaffRow,
+  fetchAttendance, insertAttendanceMany, updateAttendance, deleteAttendanceRow,
   fetchPending, insertPending, deletePendingRow,
 } from "./api";
 
@@ -4004,12 +4005,471 @@ function CalendarTab({ items, transactions, vendors, projects = [], events, setE
   );
 }
 
+// ---------- 인원관리대장 (출근기록부) ----------
+const WEEKDAY_KR = ["일", "월", "화", "수", "목", "금", "토"];
+const WORK_UNIT_OPTIONS = [0.5, 1, 1.5, 2];
+
+function AttendanceFormModal({ staff, siteOptions, initial, onSave, onClose }) {
+  const isEdit = !!initial;
+  const [startDate, setStartDate] = useState(initial?.workDate || todayStr());
+  const [endDate, setEndDate] = useState("");
+  const [excludeWeekend, setExcludeWeekend] = useState(false);
+  const [names, setNames] = useState(initial ? [initial.staffName] : []);
+  const [site, setSite] = useState(initial?.site || "");
+  const [workUnit, setWorkUnit] = useState(String(initial?.workUnit ?? 1));
+  const [note, setNote] = useState(initial?.note || "");
+  const [error, setError] = useState("");
+
+  const unitOptions = Array.from(new Set([...WORK_UNIT_OPTIONS, Number(workUnit)])).sort((a, b) => a - b);
+
+  function toggleName(n) {
+    setNames((prev) => (prev.includes(n) ? prev.filter((x) => x !== n) : [...prev, n]));
+  }
+
+  function submit() {
+    if (names.length === 0) { setError("직원을 한 명 이상 선택해주세요."); return; }
+    if (!site.trim()) { setError("현장명을 입력해주세요."); return; }
+    if (!startDate) { setError("날짜를 선택해주세요."); return; }
+    if (!isEdit && endDate && endDate < startDate) { setError("종료일이 시작일보다 빠릅니다."); return; }
+
+    const dates = isEdit || !endDate ? [startDate] : eachDateInRange(startDate, endDate);
+    const records = [];
+    for (const ds of dates) {
+      const dow = new Date(ds + "T00:00:00").getDay();
+      if (!isEdit && excludeWeekend && (dow === 0 || dow === 6)) continue;
+      for (const n of names) {
+        records.push({
+          workDate: ds, staffName: n, site: site.trim(), workUnit: Number(workUnit) || 1,
+          note: note.trim(), source: initial?.source || "manual",
+        });
+      }
+    }
+    if (records.length === 0) { setError("등록할 날짜가 없습니다 (주말 제외 설정을 확인하세요)."); return; }
+    onSave(records, initial?.id || null);
+  }
+
+  const rosterNames = staff.map((s) => s.name);
+  const allNames = isEdit && !rosterNames.includes(initial.staffName) ? [initial.staffName, ...rosterNames] : rosterNames;
+
+  return (
+    <Modal title={isEdit ? "출근 기록 수정" : "출근 기록 추가"} onClose={onClose} width={540}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 150 }}>
+            <Field label={isEdit ? "날짜" : "시작일"} required>
+              <TextInput type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={{ width: "100%", boxSizing: "border-box" }} />
+            </Field>
+          </div>
+          {!isEdit && (
+            <div style={{ flex: 1, minWidth: 150 }}>
+              <Field label="종료일 (여러 날일 때)">
+                <TextInput type="date" value={endDate} min={startDate} onChange={(e) => setEndDate(e.target.value)} style={{ width: "100%", boxSizing: "border-box" }} />
+              </Field>
+            </div>
+          )}
+        </div>
+        {!isEdit && endDate && (
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "#6B7280", cursor: "pointer", marginTop: -6 }}>
+            <input type="checkbox" checked={excludeWeekend} onChange={(e) => setExcludeWeekend(e.target.checked)} style={{ width: 14, height: 14 }} />
+            토·일 제외하고 등록
+          </label>
+        )}
+
+        <Field label={isEdit ? "직원" : "직원 (여러 명 선택 가능)"} required>
+          {allNames.length === 0 ? (
+            <div style={{ fontSize: 12, color: "#A2A9B8" }}>등록된 직원이 없습니다. 달력 탭의 직원 명단에서 먼저 추가해주세요.</div>
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {allNames.map((n) => {
+                const on = names.includes(n);
+                const pos = staff.find((s) => s.name === n)?.position;
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => (isEdit ? setNames([n]) : toggleName(n))}
+                    style={{
+                      padding: "6px 11px", borderRadius: 999, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                      border: on ? "2px solid #FB8500" : "1px solid #DADFE6",
+                      background: on ? "#FFF3E6" : "#fff", color: on ? "#FB8500" : "#4B5563",
+                    }}
+                  >
+                    {n}{pos ? ` ${pos}` : ""}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </Field>
+
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: 2, minWidth: 180 }}>
+            <Field label="현장" required>
+              <TextInput
+                value={site}
+                onChange={(e) => setSite(e.target.value)}
+                placeholder="현장명 (목록에서 선택 또는 직접 입력)"
+                list="attendance-site-options"
+                style={{ width: "100%", boxSizing: "border-box" }}
+              />
+              <datalist id="attendance-site-options">
+                {siteOptions.map((s) => <option key={s} value={s} />)}
+              </datalist>
+            </Field>
+          </div>
+          <div style={{ flex: 1, minWidth: 100 }}>
+            <Field label="공수">
+              <Select value={workUnit} onChange={(e) => setWorkUnit(e.target.value)} style={{ width: "100%", boxSizing: "border-box" }}>
+                {unitOptions.map((u) => <option key={u} value={u}>{u === 1 ? "1 (종일)" : u === 0.5 ? "0.5 (반일)" : u}</option>)}
+              </Select>
+            </Field>
+          </div>
+        </div>
+
+        <Field label="비고">
+          <TextInput value={note} onChange={(e) => setNote(e.target.value)} placeholder="예: 야간작업, 조기퇴근 등" style={{ width: "100%", boxSizing: "border-box" }} />
+        </Field>
+
+        {error && <div style={{ fontSize: 12.5, color: "#E63946", fontWeight: 600 }}>{error}</div>}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+          <GhostButton onClick={onClose}>취소</GhostButton>
+          <PrimaryButton onClick={submit}>{isEdit ? "저장" : "등록"}</PrimaryButton>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function AttendanceTab({ attendance, setAttendance, events, staff = [], role, username, pending, setPending }) {
+  const [cursor, setCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
+  const [personFilter, setPersonFilter] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [editRow, setEditRow] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+  const isMember = role === "member";
+
+  const year = cursor.getFullYear();
+  const month = cursor.getMonth();
+  const monthPrefix = `${year}-${String(month + 1).padStart(2, "0")}`;
+  const monthLabel = `${year}년 ${month + 1}월`;
+
+  function positionOf(name) {
+    return staff.find((s) => s.name === name)?.position || "";
+  }
+  function hasPending(id) {
+    return pending.some((p) => p.entity === "attendance" && p.targetId === id);
+  }
+  function weekdayOf(ds) {
+    return WEEKDAY_KR[new Date(ds + "T00:00:00").getDay()];
+  }
+
+  const monthRows = useMemo(
+    () => attendance
+      .filter((a) => a.workDate.startsWith(monthPrefix))
+      .sort((a, b) => a.workDate.localeCompare(b.workDate) || a.staffName.localeCompare(b.staffName)),
+    [attendance, monthPrefix]
+  );
+  const tableRows = personFilter ? monthRows.filter((a) => a.staffName === personFilter) : monthRows;
+
+  // 인원별 집계 (출근일수 / 총 공수 / 투입 현장) - 나중에 인건비 산출 기준
+  const summary = useMemo(() => {
+    const map = {};
+    for (const a of monthRows) {
+      if (!map[a.staffName]) map[a.staffName] = { dates: new Set(), units: 0, sites: new Set() };
+      map[a.staffName].dates.add(a.workDate);
+      map[a.staffName].units += a.workUnit;
+      if (a.site) map[a.staffName].sites.add(a.site);
+    }
+    return Object.keys(map).sort().map((name) => ({
+      name, days: map[name].dates.size, units: map[name].units, sites: Array.from(map[name].sites),
+    }));
+  }, [monthRows]);
+  const totalUnits = summary.reduce((s, r) => s + r.units, 0);
+
+  const personOptions = useMemo(
+    () => Array.from(new Set(monthRows.map((a) => a.staffName))).sort(),
+    [monthRows]
+  );
+
+  const siteOptions = useMemo(() => {
+    const set = new Set();
+    for (const e of events) { const s = (e.site || "").trim(); if (s) set.add(s); }
+    for (const a of attendance) { if (a.site) set.add(a.site); }
+    return Array.from(set).sort();
+  }, [events, attendance]);
+
+  // 달력 일정(현장 + 담당자 + 기간)에서 아직 대장에 없는 출근 기록 후보 만들기
+  const importCandidates = useMemo(() => {
+    const existing = new Set(attendance.map((a) => `${a.workDate}|${a.staffName}|${a.site}`));
+    const seen = new Set();
+    const list = [];
+    for (const e of events) {
+      if (!e.date || !e.assignees || e.assignees.length === 0) continue;
+      const site = (e.site || e.title || "").trim();
+      if (!site) continue;
+      for (const ds of eachDateInRange(e.date, e.endDate || e.date)) {
+        if (!ds.startsWith(monthPrefix)) continue;
+        for (const name of e.assignees) {
+          const key = `${ds}|${name}|${site}`;
+          if (existing.has(key) || seen.has(key)) continue;
+          seen.add(key);
+          list.push({ workDate: ds, staffName: name, site, workUnit: 1, note: "", source: "calendar" });
+        }
+      }
+    }
+    return list.sort((a, b) => a.workDate.localeCompare(b.workDate) || a.staffName.localeCompare(b.staffName));
+  }, [events, attendance, monthPrefix]);
+
+  function summaryText(rec) {
+    return `${rec.workDate} ${rec.staffName} · ${rec.site}`;
+  }
+
+  async function saveRecords(records, editingId) {
+    setBusy(true);
+    try {
+      if (isMember) {
+        const newPending = [];
+        for (const rec of records) {
+          const created = await insertPending({
+            entity: "attendance", action: editingId ? "edit" : "create", targetId: editingId || null, payload: rec,
+            summary: `출근기록 ${editingId ? "수정" : "등록"} 요청 (${summaryText(rec)})`,
+            requestedBy: username,
+          });
+          newPending.push(created);
+        }
+        setPending([...newPending, ...pending]);
+        setNotice(`출근기록 ${editingId ? "수정" : "등록"} 요청 ${records.length}건이 접수되었습니다. 관리자 승인 후 반영됩니다.`);
+      } else if (editingId) {
+        const updated = await updateAttendance(editingId, records[0]);
+        setAttendance(attendance.map((a) => (a.id === editingId ? updated : a)));
+        setNotice("출근기록이 수정되었습니다.");
+      } else {
+        const created = await insertAttendanceMany(records);
+        setAttendance([...attendance, ...created]);
+        const skipped = records.length - created.length;
+        setNotice(`출근기록 ${created.length}건이 등록되었습니다.${skipped > 0 ? ` (이미 등록된 ${skipped}건은 제외)` : ""}`);
+      }
+      setShowForm(false);
+      setEditRow(null);
+    } catch (err) {
+      const dup = err && (err.code === "23505" || /duplicate/i.test(err.message || ""));
+      setNotice(dup ? "같은 날짜·직원·현장의 기록이 이미 있습니다." : `저장 중 오류가 발생했습니다: ${err?.message || err}`);
+    }
+    setBusy(false);
+  }
+
+  async function importFromCalendar() {
+    if (importCandidates.length === 0) return;
+    await saveRecords(importCandidates, null);
+  }
+
+  async function deleteRecord(row) {
+    try {
+      if (isMember) {
+        const created = await insertPending({
+          entity: "attendance", action: "delete", targetId: row.id, payload: null,
+          summary: `출근기록 삭제 요청 (${summaryText({ workDate: row.workDate, staffName: row.staffName, site: row.site })})`,
+          requestedBy: username,
+        });
+        setPending([created, ...pending]);
+        setNotice("출근기록 삭제 요청이 접수되었습니다. 관리자 승인 후 반영됩니다.");
+      } else {
+        await deleteAttendanceRow(row.id);
+        setAttendance(attendance.filter((a) => a.id !== row.id));
+      }
+    } catch (err) {
+      setNotice(`삭제 중 오류가 발생했습니다: ${err?.message || err}`);
+    }
+    setDeleteTarget(null);
+  }
+
+  function exportExcel() {
+    const detail = monthRows.map((a) => ({
+      "날짜": a.workDate, "요일": weekdayOf(a.workDate), "이름": a.staffName, "직책": positionOf(a.staffName),
+      "현장": a.site, "공수": a.workUnit, "비고": a.note, "구분": a.source === "calendar" ? "달력연동" : "직접입력",
+    }));
+    const sum = summary.map((r) => ({
+      "이름": r.name, "직책": positionOf(r.name), "출근일수": r.days, "총공수": r.units, "투입현장": r.sites.join(", "),
+    }));
+    const wb = XLSX.utils.book_new();
+    function addSheet(rows, name) {
+      const ws = XLSX.utils.json_to_sheet(rows);
+      if (rows.length > 0) {
+        const headers = Object.keys(rows[0]);
+        ws["!cols"] = headers.map((h) => ({
+          wch: Math.min(Math.max(Math.max(displayWidth(h), ...rows.map((r) => displayWidth(r[h]))) + 2, 8), 40),
+        }));
+        ws["!views"] = [{ state: "frozen", ySplit: 1 }];
+        if (ws["!ref"]) ws["!autofilter"] = { ref: ws["!ref"] };
+      }
+      XLSX.utils.book_append_sheet(wb, ws, name);
+    }
+    addSheet(detail.length ? detail : [{ "날짜": "", "요일": "", "이름": "", "직책": "", "현장": "", "공수": "", "비고": "", "구분": "" }], "일자별 출근기록");
+    addSheet(sum.length ? sum : [{ "이름": "", "직책": "", "출근일수": "", "총공수": "", "투입현장": "" }], "인원별 집계");
+    XLSX.writeFile(wb, `인원관리대장_${monthPrefix}.xlsx`);
+  }
+
+  const th = { padding: "9px 12px", fontWeight: 700, fontSize: 12, textAlign: "left", whiteSpace: "nowrap" };
+  const td = { padding: "8px 12px", fontSize: 13 };
+
+  return (
+    <div>
+      {notice && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          background: "#EAF1FE", border: "1px solid #C9DCFB", color: "#2554A8",
+          borderRadius: 8, padding: "10px 14px", fontSize: 12.5, fontWeight: 600, marginBottom: 14,
+        }}>
+          <span>{notice}</span>
+          <button onClick={() => setNotice("")} style={{ border: "none", background: "none", cursor: "pointer", color: "#2554A8" }}><X size={14} /></button>
+        </div>
+      )}
+
+      <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button onClick={() => setCursor(new Date(year, month - 1, 1))} style={{ border: "1px solid #DADFE6", background: "#fff", borderRadius: 6, width: 32, height: 32, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><ChevronLeft size={15} /></button>
+          <div style={{ minWidth: 104, textAlign: "center", fontWeight: 800, fontSize: 14.5, color: "#14213D" }}>{monthLabel}</div>
+          <button onClick={() => setCursor(new Date(year, month + 1, 1))} style={{ border: "1px solid #DADFE6", background: "#fff", borderRadius: 6, width: 32, height: 32, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><ChevronRight size={15} /></button>
+        </div>
+        <Select value={personFilter} onChange={(e) => setPersonFilter(e.target.value)} style={{ padding: "7px 10px", fontSize: 13 }}>
+          <option value="">전체 인원</option>
+          {personOptions.map((n) => <option key={n} value={n}>{n}</option>)}
+        </Select>
+        <div style={{ flex: 1 }} />
+        <GhostButton
+          onClick={importFromCalendar}
+          disabled={importCandidates.length === 0 || busy}
+          style={{ padding: "8px 12px", fontSize: 12.5, opacity: importCandidates.length === 0 ? 0.5 : 1, borderColor: "#3B82F6", color: "#3B82F6" }}
+        >
+          <CalendarDays size={14} /> 달력 일정에서 불러오기{importCandidates.length > 0 ? ` (${importCandidates.length}건)` : ""}
+        </GhostButton>
+        <PrimaryButton onClick={() => setShowForm(true)}>
+          <Plus size={16} /> 출근 기록 추가
+        </PrimaryButton>
+        <GhostButton onClick={exportExcel} style={{ padding: "8px 12px", fontSize: 12.5 }}>
+          <FileDown size={14} /> 엑셀로 저장
+        </GhostButton>
+        <GhostButton onClick={() => printElementById("attendance-print-area")} style={{ padding: "8px 12px", fontSize: 12.5 }}>
+          <Printer size={14} /> 인쇄
+        </GhostButton>
+      </div>
+
+      <div id="attendance-print-area" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px", borderBottom: "1px solid #EEF0F3", display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
+            <div style={{ fontWeight: 800, fontSize: 14, color: "#14213D" }}>인원관리대장 — {monthLabel} 인원별 집계</div>
+            <div style={{ fontSize: 12, color: "#8A93A6" }}>총 {summary.length}명 · 총 공수 {totalUnits}</div>
+          </div>
+          <div className="table-scroll">
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "#F7F8FA", color: "#6B7280" }}>
+                  <th style={th}>이름</th><th style={th}>직책</th>
+                  <th style={{ ...th, textAlign: "right" }}>출근일수</th>
+                  <th style={{ ...th, textAlign: "right" }}>총 공수</th>
+                  <th style={th}>투입 현장</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.length === 0 && (
+                  <tr><td colSpan={5} style={{ padding: 22, textAlign: "center", color: "#A2A9B8", fontSize: 13 }}>이 달의 출근 기록이 없습니다.</td></tr>
+                )}
+                {summary.map((r) => (
+                  <tr key={r.name} style={{ borderTop: "1px solid #F1F2F5" }}>
+                    <td style={{ ...td, fontWeight: 700, color: "#14213D" }}>{r.name}</td>
+                    <td style={{ ...td, color: "#6B7280" }}>{positionOf(r.name) || "-"}</td>
+                    <td style={{ ...td, textAlign: "right", fontFamily: "ui-monospace, monospace" }}>{r.days}일</td>
+                    <td style={{ ...td, textAlign: "right", fontFamily: "ui-monospace, monospace", fontWeight: 800 }}>{r.units}</td>
+                    <td style={{ ...td, color: "#6B7280" }}>{r.sites.join(", ") || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px", borderBottom: "1px solid #EEF0F3", fontWeight: 800, fontSize: 14, color: "#14213D" }}>
+            일자별 출근기록{personFilter ? ` — ${personFilter}` : ""} ({tableRows.length}건)
+          </div>
+          <div className="table-scroll">
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "#F7F8FA", color: "#6B7280" }}>
+                  <th style={th}>날짜</th><th style={th}>요일</th><th style={th}>이름</th><th style={th}>직책</th>
+                  <th style={th}>현장</th>
+                  <th style={{ ...th, textAlign: "right" }}>공수</th>
+                  <th style={th}>비고</th>
+                  <th className="no-print" style={{ ...th, textAlign: "right" }}>작업</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tableRows.length === 0 && (
+                  <tr><td colSpan={8} style={{ padding: 24, textAlign: "center", color: "#A2A9B8", fontSize: 13 }}>
+                    기록이 없습니다. "출근 기록 추가" 또는 "달력 일정에서 불러오기"로 등록하세요.
+                  </td></tr>
+                )}
+                {tableRows.map((a) => {
+                  const dow = new Date(a.workDate + "T00:00:00").getDay();
+                  return (
+                    <tr key={a.id} style={{ borderTop: "1px solid #F1F2F5" }}>
+                      <td style={{ ...td, fontFamily: "ui-monospace, monospace", whiteSpace: "nowrap" }}>{a.workDate}</td>
+                      <td style={{ ...td, color: dow === 0 ? "#E63946" : dow === 6 ? "#3B82F6" : "#6B7280" }}>{WEEKDAY_KR[dow]}</td>
+                      <td style={{ ...td, fontWeight: 700, color: "#14213D", whiteSpace: "nowrap" }}>
+                        {a.staffName}
+                        {hasPending(a.id) && (
+                          <span className="no-print" style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 999, fontSize: 9.5, fontWeight: 700, background: "#FFF3E6", color: "#FB8500" }}>승인대기</span>
+                        )}
+                      </td>
+                      <td style={{ ...td, color: "#6B7280" }}>{positionOf(a.staffName) || "-"}</td>
+                      <td style={td}>{a.site || "-"}</td>
+                      <td style={{ ...td, textAlign: "right", fontFamily: "ui-monospace, monospace" }}>{a.workUnit}</td>
+                      <td style={{ ...td, color: "#6B7280" }}>{a.note || ""}</td>
+                      <td className="no-print" style={{ ...td, textAlign: "right" }}>
+                        <div style={{ display: "inline-flex", gap: 6 }}>
+                          <IconBtn title={isMember ? "수정 요청" : "수정"} color="#6B7280" onClick={() => setEditRow(a)}><Edit2 size={14} /></IconBtn>
+                          <IconBtn title={isMember ? "삭제 요청" : "삭제"} color="#6B7280" onClick={() => setDeleteTarget(a)}><Trash2 size={14} /></IconBtn>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 40, padding: "6px 6px 0", fontSize: 12.5, color: "#6B7280" }}>
+          <span>작성자: ____________</span>
+          <span>확인(관리자): ____________ (인)</span>
+        </div>
+      </div>
+
+      {showForm && <AttendanceFormModal staff={staff} siteOptions={siteOptions} onSave={saveRecords} onClose={() => setShowForm(false)} />}
+      {editRow && <AttendanceFormModal staff={staff} siteOptions={siteOptions} initial={editRow} onSave={saveRecords} onClose={() => setEditRow(null)} />}
+      {deleteTarget && (
+        <ConfirmDialog
+          text={isMember
+            ? `${deleteTarget.workDate} ${deleteTarget.staffName}의 출근기록 삭제를 관리자에게 요청하시겠습니까?`
+            : `${deleteTarget.workDate} ${deleteTarget.staffName}의 출근기록을 삭제하시겠습니까?`}
+          onConfirm={() => deleteRecord(deleteTarget)}
+          onClose={() => setDeleteTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 // ---------- Admin tab (회원 승인 / 변경 요청 승인) ----------
 function AdminTab({
   users, setUsers, pending, setPending,
   items, setItems, transactions, setTransactions,
   vendors, setVendors, events, setEvents, projects, setProjects,
   incoming = [], setIncoming, staff = [], setStaff,
+  attendance = [], setAttendance,
 }) {
   const pendingUsers = users.filter((u) => u.status === "pending");
 
@@ -4230,6 +4690,19 @@ function AdminTab({
         await deleteStaffRow(p.targetId);
         setStaff(staff.filter((s) => s.id !== p.targetId));
       }
+    } else if (p.entity === "attendance") {
+      if (p.action === "create") {
+        const created = await insertAttendanceMany([p.payload]);
+        setAttendance([...attendance, ...created]);
+      }
+      if (p.action === "edit") {
+        const updated = await updateAttendance(p.targetId, p.payload);
+        setAttendance(attendance.map((a) => (a.id === p.targetId ? updated : a)));
+      }
+      if (p.action === "delete") {
+        await deleteAttendanceRow(p.targetId);
+        setAttendance(attendance.filter((a) => a.id !== p.targetId));
+      }
     }
     await deletePendingRow(p.id);
     setPending(pending.filter((x) => x.id !== p.id));
@@ -4310,6 +4783,7 @@ export default function App() {
   const [projects, setProjects] = useState([]);
   const [incoming, setIncoming] = useState([]);
   const [staff, setStaff] = useState([]);
+  const [attendance, setAttendance] = useState([]);
   const [users, setUsers] = useState([]);
   const [pending, setPending] = useState([]);
 
@@ -4331,7 +4805,7 @@ export default function App() {
 
   async function loadAllData(role) {
     setLoading(true);
-    const [i, t, v, e, pr, ic, st, p] = await Promise.all([
+    const [i, t, v, e, pr, ic, st, p, att] = await Promise.all([
       fetchItems(),
       fetchTransactions(),
       fetchVendors(),
@@ -4340,6 +4814,7 @@ export default function App() {
       fetchIncomingRequests(),
       fetchStaff(),
       fetchPending(),
+      fetchAttendance(),
     ]);
     setItems(i);
     setTransactions(t);
@@ -4349,6 +4824,7 @@ export default function App() {
     setIncoming(ic);
     setStaff(st);
     setPending(p);
+    setAttendance(att);
     if (role === "admin") {
       const u = await fetchAllProfiles();
       setUsers(u);
@@ -4366,7 +4842,7 @@ export default function App() {
   async function handleLogout() {
     await supabase.auth.signOut();
     setAuthUser(null);
-    setItems([]); setTransactions([]); setVendors([]); setEvents([]); setProjects([]); setIncoming([]); setStaff([]); setUsers([]); setPending([]);
+    setItems([]); setTransactions([]); setVendors([]); setEvents([]); setProjects([]); setIncoming([]); setStaff([]); setUsers([]); setPending([]); setAttendance([]);
     setTab("dashboard");
   }
 
@@ -4391,6 +4867,7 @@ export default function App() {
   const pendingIncomingCount = incoming.filter((r) => r.status === "pending").length;
   const navItems = [
     { id: "dashboard", label: "대시보드", icon: LayoutDashboard },
+    { id: "attendance", label: "인원관리대장", icon: Users },
     { id: "inventory", label: "재고관리", icon: Package, badge: pendingIncomingCount || undefined },
     { id: "vendors", label: "거래처관리", icon: Truck },
     { id: "calendar", label: "달력", icon: CalendarDays },
@@ -4470,6 +4947,13 @@ export default function App() {
             <div style={{ color: "#A2A9B8", fontSize: 13.5 }}>불러오는 중...</div>
           ) : tab === "dashboard" ? (
             <DashboardTab items={items} transactions={transactions} vendors={vendors} events={events} staff={staff} />
+          ) : tab === "attendance" ? (
+            <AttendanceTab
+              attendance={attendance} setAttendance={setAttendance}
+              events={events} staff={staff}
+              role={role} username={authUser.username}
+              pending={pending} setPending={setPending}
+            />
           ) : tab === "inventory" ? (
             <InventoryTab
               items={items} setItems={setItems}
@@ -4513,6 +4997,7 @@ export default function App() {
               projects={projects} setProjects={setProjects}
               incoming={incoming} setIncoming={setIncoming}
               staff={staff} setStaff={setStaff}
+              attendance={attendance} setAttendance={setAttendance}
             />
           )}
         </div>
