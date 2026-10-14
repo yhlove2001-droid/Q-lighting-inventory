@@ -330,3 +330,14 @@ export async function renameAttendanceStaff(oldName, newName) {
   const { error } = await supabase.from("attendance").update({ staff_name: newName }).eq("staff_name", oldName);
   if (error) throw error;
 }
+
+// ---------- 변경 기록 (관리자 전용 조회) ----------
+export async function fetchActivityLog(limit = 300) {
+  const { data, error } = await supabase
+    .from("activity_log")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data || [];
+}

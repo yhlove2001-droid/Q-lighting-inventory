@@ -18,7 +18,7 @@ import {
   fetchProjects, insertProject, updateProject, deleteProjectRow,
   fetchIncomingRequests, insertIncomingRequest, updateIncomingRequest, deleteIncomingRequestRow,
   fetchStaff, insertStaff, updateStaff, deleteStaffRow,
-  fetchAttendance, insertAttendanceMany, updateAttendance, deleteAttendanceRow, deleteAttendanceMany, renameAttendanceStaff,
+  fetchAttendance, insertAttendanceMany, updateAttendance, deleteAttendanceRow, deleteAttendanceMany, renameAttendanceStaff, fetchActivityLog,
   fetchPending, insertPending, deletePendingRow,
 } from "./api";
 
@@ -5029,6 +5029,34 @@ function AdminTab({
   attendance = [], setAttendance,
 }) {
   const pendingUsers = users.filter((u) => u.status === "pending");
+  const approvedUsers = users.filter((u) => u.status === "approved");
+
+  // 변경 기록 (누가 언제 무엇을 바꿨는지)
+  const [logs, setLogs] = useState([]);
+  const [logLoading, setLogLoading] = useState(false);
+  const [logError, setLogError] = useState(false);
+  const [logUser, setLogUser] = useState("");
+  const [logTable, setLogTable] = useState("");
+  const [logLimit, setLogLimit] = useState(60);
+  async function loadLogs() {
+    setLogLoading(true);
+    try { setLogs(await fetchActivityLog(500)); setLogError(false); } catch (err) { console.error(err); setLogError(true); }
+    setLogLoading(false);
+  }
+  useEffect(() => { loadLogs(); }, []);
+  const logUsers = Array.from(new Set(logs.map((l) => l.username).filter(Boolean))).sort();
+  const filteredLogs = logs.filter((l) => (!logUser || l.username === logUser) && (!logTable || l.table_name === logTable));
+  const LOG_TABLE_LABEL = { items: "품목", transactions: "입출고", vendors: "거래처", events: "달력 일정", projects: "프로젝트", incoming_requests: "입고예정", staff: "직원", attendance: "출근기록" };
+  const LOG_ACTION = {
+    INSERT: { label: "등록", bg: "#E6F6EC", fg: "#15803D" },
+    UPDATE: { label: "수정", bg: "#EAF1FE", fg: "#2563EB" },
+    DELETE: { label: "삭제", bg: "#FCEBEC", fg: "#B91C3C" },
+  };
+  function fmtLogTime(ts) {
+    try {
+      return new Date(ts).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+    } catch { return String(ts).slice(0, 16); }
+  }
 
   async function approveUser(id) {
     await approveProfile(id);
@@ -5302,7 +5330,104 @@ function AdminTab({
 
       <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
         <div style={{ padding: "14px 18px", borderBottom: "1px solid #EEF0F3", fontWeight: 800, fontSize: 14, color: "#14213D", display: "flex", alignItems: "center", gap: 8 }}>
-          <Clock size={16} color="#FB8500" /> 변경 요청 승인 대기 ({pending.length})
+          <Users size={16} color="#FB8500" /> 가입된 회원 ({approvedUsers.length}명)
+        </div>
+        {approvedUsers.length === 0 ? (
+          <div style={{ padding: 24, textAlign: "center", color: "#A2A9B8", fontSize: 13 }}>승인된 회원이 없습니다.</div>
+        ) : (
+          <div className="table-scroll">
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "#F7F8FA", color: "#6B7280", fontSize: 12 }}>
+                  <th style={{ padding: "9px 18px", textAlign: "left" }}>아이디</th>
+                  <th style={{ padding: "9px 12px", textAlign: "left" }}>구분</th>
+                  <th style={{ padding: "9px 12px", textAlign: "left" }}>가입일</th>
+                </tr>
+              </thead>
+              <tbody>
+                {approvedUsers.map((u) => (
+                  <tr key={u.id} style={{ borderTop: "1px solid #F1F2F5", fontSize: 13 }}>
+                    <td style={{ padding: "9px 18px", fontWeight: 700, color: "#14213D" }}>{u.username}</td>
+                    <td style={{ padding: "9px 12px" }}>
+                      <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: u.role === "admin" ? "#FFF3E6" : "#EAF1FE", color: u.role === "admin" ? "#FB8500" : "#2563EB" }}>
+                        {u.role === "admin" ? "관리자" : "일반회원"}
+                      </span>
+                    </td>
+                    <td style={{ padding: "9px 12px", color: "#6B7280" }}>{u.created_at?.slice(0, 10)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
+        <div style={{ padding: "12px 18px", borderBottom: "1px solid #EEF0F3", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 800, fontSize: 14, color: "#14213D", display: "flex", alignItems: "center", gap: 8 }}>
+            <ClipboardList size={16} color="#FB8500" /> 변경 기록 ({filteredLogs.length}건)
+          </div>
+          <div style={{ flex: 1 }} />
+          <Select value={logUser} onChange={(e) => { setLogUser(e.target.value); setLogLimit(60); }} style={{ padding: "6px 10px", fontSize: 12.5 }}>
+            <option value="">전체 회원</option>
+            {logUsers.map((n) => <option key={n} value={n}>{n}</option>)}
+          </Select>
+          <Select value={logTable} onChange={(e) => { setLogTable(e.target.value); setLogLimit(60); }} style={{ padding: "6px 10px", fontSize: 12.5 }}>
+            <option value="">전체 항목</option>
+            {Object.keys(LOG_TABLE_LABEL).map((k) => <option key={k} value={k}>{LOG_TABLE_LABEL[k]}</option>)}
+          </Select>
+          <GhostButton onClick={loadLogs} style={{ padding: "6px 10px", fontSize: 12.5 }}><RefreshCw size={13} /> 새로고침</GhostButton>
+        </div>
+        {logError ? (
+          <div style={{ padding: 24, textAlign: "center", color: "#E63946", fontSize: 13 }}>
+            변경 기록을 불러오지 못했습니다. Supabase에서 supabase_schema_activity_log.sql을 실행했는지 확인해주세요.
+          </div>
+        ) : filteredLogs.length === 0 ? (
+          <div style={{ padding: 24, textAlign: "center", color: "#A2A9B8", fontSize: 13 }}>
+            {logLoading ? "불러오는 중..." : "기록이 없습니다. (SQL 실행 이후의 변경부터 기록됩니다)"}
+          </div>
+        ) : (
+          <div className="table-scroll">
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "#F7F8FA", color: "#6B7280", fontSize: 12 }}>
+                  <th style={{ padding: "9px 18px", textAlign: "left", whiteSpace: "nowrap" }}>일시</th>
+                  <th style={{ padding: "9px 12px", textAlign: "left" }}>회원</th>
+                  <th style={{ padding: "9px 12px", textAlign: "left" }}>항목</th>
+                  <th style={{ padding: "9px 12px", textAlign: "left" }}>작업</th>
+                  <th style={{ padding: "9px 12px", textAlign: "left" }}>내용</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredLogs.slice(0, logLimit).map((l) => {
+                  const act = LOG_ACTION[l.action] || { label: l.action, bg: "#F1F2F5", fg: "#6B7280" };
+                  return (
+                    <tr key={l.id} style={{ borderTop: "1px solid #F1F2F5", fontSize: 12.5 }}>
+                      <td style={{ padding: "8px 18px", color: "#6B7280", whiteSpace: "nowrap", fontFamily: "ui-monospace, monospace" }}>{fmtLogTime(l.created_at)}</td>
+                      <td style={{ padding: "8px 12px", fontWeight: 700, color: "#14213D", whiteSpace: "nowrap" }}>{l.username || "-"}</td>
+                      <td style={{ padding: "8px 12px", color: "#4B5563", whiteSpace: "nowrap" }}>{LOG_TABLE_LABEL[l.table_name] || l.table_name}</td>
+                      <td style={{ padding: "8px 12px" }}>
+                        <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: act.bg, color: act.fg }}>{act.label}</span>
+                      </td>
+                      <td style={{ padding: "8px 12px", color: "#374151" }}>{l.summary || "-"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {filteredLogs.length > logLimit && (
+              <div style={{ padding: 12, textAlign: "center", borderTop: "1px solid #F1F2F5" }}>
+                <GhostButton onClick={() => setLogLimit(logLimit + 100)} style={{ padding: "6px 14px", fontSize: 12.5 }}>더 보기</GhostButton>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {pending.length > 0 && (
+      <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EEF0F3", overflow: "hidden" }}>
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid #EEF0F3", fontWeight: 800, fontSize: 14, color: "#14213D", display: "flex", alignItems: "center", gap: 8 }}>
+          <Clock size={16} color="#FB8500" /> 남아 있는 변경 요청 ({pending.length})
         </div>
         {pending.length === 0 ? (
           <div style={{ padding: 24, textAlign: "center", color: "#A2A9B8", fontSize: 13 }}>대기 중인 변경 요청이 없습니다.</div>
@@ -5323,6 +5448,7 @@ function AdminTab({
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
