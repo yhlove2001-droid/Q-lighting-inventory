@@ -4011,7 +4011,7 @@ const WORK_UNIT_OPTIONS = [0.5, 1, 1.5, 2];
 
 function AttendanceFormModal({ staff, siteOptions, initial, preset, onSave, onClose }) {
   const isEdit = !!initial;
-  const [startDate, setStartDate] = useState(initial?.workDate || todayStr());
+  const [startDate, setStartDate] = useState(initial?.workDate || preset?.date || todayStr());
   const [endDate, setEndDate] = useState("");
   const [excludeWeekend, setExcludeWeekend] = useState(false);
   const [names, setNames] = useState(initial ? [initial.staffName] : preset?.name ? [preset.name] : []);
@@ -4141,6 +4141,64 @@ function AttendanceFormModal({ staff, siteOptions, initial, preset, onSave, onCl
   );
 }
 
+function GroupCalendar({ rows, year, month, mode, staff, onPickDate }) {
+  // 한 인원(또는 한 현장)의 출근 기록을 월 달력으로 표시
+  const byDate = {};
+  for (const r of rows) (byDate[r.workDate] = byDate[r.workDate] || []).push(r);
+  const first = new Date(year, month, 1);
+  const lead = first.getDay();
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push(null);
+  for (let d = 1; d <= lastDay; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+  const pad = (n) => String(n).padStart(2, "0");
+  const today = todayStr();
+  return (
+    <div style={{ padding: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 4 }}>
+        {WEEKDAY_KR.map((w, i) => (
+          <div key={w} style={{ textAlign: "center", fontSize: 11.5, fontWeight: 700, padding: "3px 0", color: i === 0 ? "#E63946" : i === 6 ? "#3B82F6" : "#8A93A6" }}>{w}</div>
+        ))}
+        {cells.map((d, idx) => {
+          if (d === null) return <div key={"e" + idx} />;
+          const ds = `${year}-${pad(month + 1)}-${pad(d)}`;
+          const list = (byDate[ds] || []).slice().sort((a, b) => a.staffName.localeCompare(b.staffName));
+          const dow = idx % 7;
+          const units = Math.round(list.reduce((t, r) => t + r.workUnit, 0) * 100) / 100;
+          return (
+            <div key={ds} onClick={() => onPickDate && onPickDate(ds)} title="클릭하면 이 날짜로 기록을 추가합니다"
+              style={{
+                minHeight: 64, borderRadius: 6, padding: "4px 5px", cursor: "pointer", overflow: "hidden",
+                background: list.length ? "#F8FAFF" : "#FCFCFD", border: ds === today ? "2px solid #FB8500" : "1px solid #EEF0F3",
+              }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: dow === 0 ? "#E63946" : dow === 6 ? "#3B82F6" : "#6B7280", fontWeight: 700 }}>
+                <span>{d}</span>
+                {mode === "site" && list.length > 0 && <span style={{ color: "#14213D" }}>{list.length}명</span>}
+              </div>
+              {mode === "person"
+                ? list.map((r) => (
+                    <div key={r.id} title={`${r.site}${r.note ? " · " + r.note : ""}`} style={{
+                      marginTop: 2, padding: "1px 4px", borderRadius: 4, fontSize: 10.5, fontWeight: 700,
+                      color: colorForSite(r.site).fg, background: colorForSite(r.site).bg, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                    }}>
+                      {r.site || "-"}{r.workUnit !== 1 ? ` (${r.workUnit})` : ""}
+                    </div>
+                  ))
+                : list.length > 0 && (
+                    <div style={{ marginTop: 2, fontSize: 10.5, lineHeight: 1.35, color: "#374151", fontWeight: 600, wordBreak: "keep-all" }}>
+                      {list.map((r) => staffLabel(r.staffName, staff) + (r.workUnit !== 1 ? `(${r.workUnit})` : "")).join(", ")}
+                    </div>
+                  )}
+              {mode === "person" && list.length > 1 && <div style={{ fontSize: 10, color: "#8A93A6" }}>공수 {units}</div>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function SiteCompact({ rows, positionOf }) {
   // 현장 하나의 기록을 "날짜별 한 줄"로 압축 + 인원별 합계 요약
   const byDate = {};
@@ -4258,6 +4316,7 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
   const [viewMode, setViewMode] = useState("person"); // person | site
   const [openGroups, setOpenGroups] = useState({});
   const [expandAll, setExpandAll] = useState(false);
+  const [layout, setLayout] = useState("calendar"); // calendar | table
   const [siteDetail, setSiteDetail] = useState(false); // 현장별 보기: 자세히(표) / 간단히(날짜별 한 줄)
   const [showStaffForm, setShowStaffForm] = useState(false);
   const [preset, setPreset] = useState(null);
@@ -4517,7 +4576,15 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
             }}>{label}</button>
           ))}
         </div>
-        {viewMode === "site" && (
+        <div style={{ display: "inline-flex", border: "1px solid #DADFE6", borderRadius: 8, overflow: "hidden" }}>
+          {[["calendar", "달력"], ["table", "표"]].map(([m, label]) => (
+            <button key={m} onClick={() => setLayout(m)} style={{
+              padding: "7px 12px", fontSize: 13, fontWeight: 700, border: "none", cursor: "pointer",
+              background: layout === m ? "#FB8500" : "#fff", color: layout === m ? "#fff" : "#6B7280",
+            }}>{label}</button>
+          ))}
+        </div>
+        {viewMode === "site" && layout === "table" && (
           <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, color: "#6B7280", cursor: "pointer" }}>
             <input type="checkbox" checked={siteDetail} onChange={(e) => setSiteDetail(e.target.checked)} style={{ width: 14, height: 14 }} />
             자세히(표)
@@ -4604,8 +4671,11 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
               </div>
               {open && (
                 <div className="table-scroll" style={{ borderTop: "1px solid #EEF0F3" }}>
-                  {g.rows.length === 0 ? (
+                  {g.rows.length === 0 && layout !== "calendar" ? (
                     <div style={{ padding: 16, fontSize: 12.5, color: "#A2A9B8", textAlign: "center" }}>이 달의 출근 기록이 없습니다.</div>
+                  ) : layout === "calendar" ? (
+                    <GroupCalendar rows={g.rows} year={year} month={month} mode={viewMode} staff={staff}
+                      onPickDate={(ds) => { setPreset(viewMode === "person" ? { name: g.key, date: ds } : { site: g.key === "(현장 미입력)" ? "" : g.key, date: ds }); setShowForm(true); }} />
                   ) : viewMode === "site" && !siteDetail ? (
                     <SiteCompact rows={g.rows} positionOf={positionOf} />
                   ) : (
