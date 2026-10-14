@@ -18,7 +18,7 @@ import {
   fetchProjects, insertProject, updateProject, deleteProjectRow,
   fetchIncomingRequests, insertIncomingRequest, updateIncomingRequest, deleteIncomingRequestRow,
   fetchStaff, insertStaff, updateStaff, deleteStaffRow,
-  fetchAttendance, insertAttendanceMany, updateAttendance, deleteAttendanceRow, deleteAttendanceMany,
+  fetchAttendance, insertAttendanceMany, updateAttendance, deleteAttendanceRow, deleteAttendanceMany, renameAttendanceStaff,
   fetchPending, insertPending, deletePendingRow,
 } from "./api";
 
@@ -3377,7 +3377,7 @@ function EventFormModal({ initial, defaultDate, staff = [], onSave, onDelete, on
   const [endDate, setEndDate] = useState(initial?.endDate || "");
   const [title, setTitle] = useState(initial?.title || "");
   const [assignees, setAssignees] = useState(initial?.assignees || []);
-  const [site, setSite] = useState(initial?.site || preset?.site || "");
+  const [site, setSite] = useState(initial?.site || "");
   const [note, setNote] = useState(initial?.note || "");
 
   function toggleAssignee(name) {
@@ -4015,7 +4015,7 @@ function AttendanceFormModal({ staff, siteOptions, initial, preset, onSave, onCl
   const [endDate, setEndDate] = useState("");
   const [excludeWeekend, setExcludeWeekend] = useState(false);
   const [names, setNames] = useState(initial ? [initial.staffName] : preset?.name ? [preset.name] : []);
-  const [site, setSite] = useState(initial?.site || "");
+  const [site, setSite] = useState(initial?.site || preset?.site || "");
   const [workUnit, setWorkUnit] = useState(String(initial?.workUnit ?? 1));
   const [note, setNote] = useState(initial?.note || "");
   const [error, setError] = useState("");
@@ -4319,7 +4319,7 @@ function GroupCalendar({ rows, year, month, mode, staff, onPickDate }) {
           const dow = idx % 7;
           const units = Math.round(list.reduce((t, r) => t + r.workUnit, 0) * 100) / 100;
           return (
-            <div key={ds} onClick={() => onPickDate && onPickDate(ds)} title="클릭하면 이 날짜로 기록을 추가합니다"
+            <div key={ds} onClick={() => onPickDate && onPickDate(ds)} title="클릭하면 이 날짜의 기록을 보고 수정/추가합니다"
               style={{
                 minHeight: 64, borderRadius: 6, padding: "4px 5px", cursor: "pointer", overflow: "hidden",
                 background: list.length ? "#F8FAFF" : "#FCFCFD", border: ds === today ? "2px solid #FB8500" : "1px solid #EEF0F3",
@@ -4429,6 +4429,55 @@ function SiteCompact({ rows, positionOf }) {
   );
 }
 
+function StaffEditModal({ person, onSave, onDelete, onClose }) {
+  const [name, setName] = useState(person.name);
+  const [position, setPosition] = useState(person.position || "");
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState("");
+  function submit() {
+    if (!name.trim()) { setError("이름을 입력해주세요."); return; }
+    onSave(person, name, position);
+  }
+  return (
+    <Modal title="인원 정보 수정" onClose={onClose} width={400}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <Field label="이름" required>
+          <TextInput value={name} onChange={(e) => setName(e.target.value)} style={{ width: "100%", boxSizing: "border-box" }} />
+        </Field>
+        <Field label="직책">
+          <TextInput value={position} onChange={(e) => setPosition(e.target.value)} placeholder="예: 과장, 사원" style={{ width: "100%", boxSizing: "border-box" }}
+            onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+        </Field>
+        <div style={{ fontSize: 11.5, color: "#8A93A6" }}>
+          이름을 바꾸면 기존 출근기록의 이름도 함께 바뀝니다. (달력 탭의 담당자 이름은 따로 수정해야 합니다)
+        </div>
+        {error && <div style={{ fontSize: 12.5, color: "#E63946", fontWeight: 600 }}>{error}</div>}
+        {confirming ? (
+          <div style={{ background: "#FCEBEC", border: "1px solid #F5C2C7", borderRadius: 8, padding: "10px 12px" }}>
+            <div style={{ fontSize: 12.5, color: "#B91C3C", fontWeight: 600, marginBottom: 8 }}>
+              '{person.name}' 님을 직원 명단에서 삭제할까요? 이미 입력된 출근기록은 그대로 남습니다.
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <GhostButton onClick={() => setConfirming(false)}>아니오</GhostButton>
+              <PrimaryButton onClick={() => onDelete(person)} style={{ background: "#E63946" }}>삭제</PrimaryButton>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+            <GhostButton onClick={() => setConfirming(true)} style={{ borderColor: "#E63946", color: "#E63946" }}>
+              <Trash2 size={14} /> 인원 삭제
+            </GhostButton>
+            <div style={{ display: "flex", gap: 8 }}>
+              <GhostButton onClick={onClose}>취소</GhostButton>
+              <PrimaryButton onClick={submit}>저장</PrimaryButton>
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 function StaffAddModal({ onSave, onClose }) {
   const [name, setName] = useState("");
   const [position, setPosition] = useState("");
@@ -4473,6 +4522,8 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
   const [showStaffForm, setShowStaffForm] = useState(false);
   const [preset, setPreset] = useState(null);
   const [bulkTarget, setBulkTarget] = useState(null);
+  const [dayTarget, setDayTarget] = useState(null); // 달력에서 누른 날짜 {key, date}
+  const [editStaff, setEditStaff] = useState(null);
 
   const year = cursor.getFullYear();
   const month = cursor.getMonth();
@@ -4548,6 +4599,37 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
     } catch (err) {
       setNotice(`직원 등록에 실패했습니다: ${err?.message || err}`);
     }
+  }
+
+  async function saveStaffEdit(person, newName, newPosition) {
+    const name = (newName || "").trim();
+    const pos = (newPosition || "").trim();
+    if (!name) return;
+    if (name === person.name && pos === (person.position || "")) { setEditStaff(null); return; }
+    if (name !== person.name && staff.some((s) => s.name === name)) { setNotice(`'${name}' 님은 이미 등록되어 있습니다.`); return; }
+    try {
+      const updated = await updateStaff(person.id, { name, position: pos });
+      setStaff(staff.map((s) => (s.id === person.id ? updated : s)).sort((x, y) => x.name.localeCompare(y.name)));
+      if (name !== person.name) {
+        await renameAttendanceStaff(person.name, name);
+        setAttendance(attendance.map((a) => (a.staffName === person.name ? { ...a, staffName: name } : a)));
+      }
+      setNotice(`저장되었습니다: ${name}${pos ? " " + pos : ""}`);
+      setEditStaff(null);
+    } catch (err) {
+      setNotice(`인원 정보 저장에 실패했습니다: ${err?.message || err}`);
+    }
+  }
+
+  async function removeStaffPerson(person) {
+    try {
+      await deleteStaffRow(person.id);
+      setStaff(staff.filter((s) => s.id !== person.id));
+      setNotice(`'${person.name}' 님을 직원 명단에서 삭제했습니다. (출근기록은 유지됩니다)`);
+    } catch (err) {
+      setNotice(`인원 삭제에 실패했습니다: ${err?.message || err}`);
+    }
+    setEditStaff(null);
   }
 
   async function deleteMany(rows) {
@@ -4797,6 +4879,13 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
                     onClick={() => { setPreset(viewMode === "person" ? { name: g.key } : { site: g.key === "(현장 미입력)" ? "" : g.key }); setShowForm(true); }}
                     style={{ border: "1px solid #DADFE6", background: "#fff", borderRadius: 6, padding: "4px 9px", fontSize: 12, fontWeight: 700, color: "#FB8500", cursor: "pointer" }}
                   >+ 기록</button>
+                  {viewMode === "person" && staff.find((st) => st.name === g.key) && (
+                    <button
+                      onClick={() => setEditStaff(staff.find((st) => st.name === g.key))}
+                      title="인원 정보 수정/삭제"
+                      style={{ border: "1px solid #DADFE6", background: "#fff", borderRadius: 6, padding: "4px 9px", fontSize: 12, fontWeight: 700, color: "#6B7280", cursor: "pointer" }}
+                    >정보</button>
+                  )}
                   {viewMode === "site" && g.rows.length > 0 && (
                     <button
                       onClick={() => exportOneSite(g.key)}
@@ -4818,7 +4907,7 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
                     <div style={{ padding: 16, fontSize: 12.5, color: "#A2A9B8", textAlign: "center" }}>이 달의 출근 기록이 없습니다.</div>
                   ) : layout === "calendar" ? (
                     <GroupCalendar rows={g.rows} year={year} month={month} mode={viewMode} staff={staff}
-                      onPickDate={(ds) => { setPreset(viewMode === "person" ? { name: g.key, date: ds } : { site: g.key === "(현장 미입력)" ? "" : g.key, date: ds }); setShowForm(true); }} />
+                      onPickDate={(ds) => setDayTarget({ key: g.key, date: ds })} />
                   ) : viewMode === "site" && !siteDetail ? (
                     <SiteCompact rows={g.rows} positionOf={positionOf} />
                   ) : (
@@ -4878,6 +4967,38 @@ function AttendanceTab({ attendance, setAttendance, events, staff = [], setStaff
       </div>
 
       {showForm && <AttendanceFormModal staff={staff} siteOptions={siteOptions} preset={preset} onSave={saveRecords} onClose={() => { setShowForm(false); setPreset(null); }} />}
+      {dayTarget && (() => {
+        const list = monthRows.filter((a) => a.workDate === dayTarget.date
+          && (viewMode === "person" ? a.staffName === dayTarget.key : (a.site || "(현장 미입력)") === dayTarget.key));
+        const dow = new Date(dayTarget.date + "T00:00:00").getDay();
+        return (
+          <Modal title={`${dayTarget.key} — ${dayTarget.date} (${WEEKDAY_KR[dow]})`} onClose={() => setDayTarget(null)} width={460}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {list.length === 0 && <div style={{ padding: "14px 0", textAlign: "center", fontSize: 13, color: "#A2A9B8" }}>이 날짜의 기록이 없습니다.</div>}
+              {list.map((a) => (
+                <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", border: "1px solid #EEF0F3", borderRadius: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 700, color: "#14213D" }}>
+                      {viewMode === "person" ? (a.site || "-") : `${a.staffName}${positionOf(a.staffName) ? " " + positionOf(a.staffName) : ""}`}
+                    </div>
+                    <div style={{ fontSize: 12, color: "#6B7280" }}>공수 {a.workUnit}{a.note ? ` · ${a.note}` : ""}</div>
+                  </div>
+                  <IconBtn title="수정" color="#6B7280" onClick={() => { setDayTarget(null); setEditRow(a); }}><Edit2 size={14} /></IconBtn>
+                  <IconBtn title="삭제" color="#6B7280" onClick={() => { setDayTarget(null); setDeleteTarget(a); }}><Trash2 size={14} /></IconBtn>
+                </div>
+              ))}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+                <GhostButton onClick={() => setDayTarget(null)}>닫기</GhostButton>
+                <PrimaryButton onClick={() => {
+                  setPreset(viewMode === "person" ? { name: dayTarget.key, date: dayTarget.date } : { site: dayTarget.key === "(현장 미입력)" ? "" : dayTarget.key, date: dayTarget.date });
+                  setDayTarget(null); setShowForm(true);
+                }}><Plus size={15} /> 이 날짜에 기록 추가</PrimaryButton>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
+      {editStaff && <StaffEditModal person={editStaff} onSave={saveStaffEdit} onDelete={removeStaffPerson} onClose={() => setEditStaff(null)} />}
       {showStaffForm && <StaffAddModal onSave={addStaff} onClose={() => setShowStaffForm(false)} />}
       {bulkTarget && (
         <ConfirmDialog

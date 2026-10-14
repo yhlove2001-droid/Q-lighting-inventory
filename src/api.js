@@ -324,3 +324,9 @@ export async function deleteAttendanceMany(ids) {
     if (error) throw error;
   }
 }
+
+// 직원 이름이 바뀌면 기존 출근기록의 이름도 함께 바꿔서 연결 유지
+export async function renameAttendanceStaff(oldName, newName) {
+  const { error } = await supabase.from("attendance").update({ staff_name: newName }).eq("staff_name", oldName);
+  if (error) throw error;
+}
