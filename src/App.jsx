@@ -18,7 +18,7 @@ import {
   fetchProjects, insertProject, updateProject, deleteProjectRow,
   fetchIncomingRequests, insertIncomingRequest, updateIncomingRequest, deleteIncomingRequestRow,
   fetchStaff, insertStaff, updateStaff, deleteStaffRow,
-  fetchAttendance, insertAttendanceMany, updateAttendance, deleteAttendanceRow, deleteAttendanceMany, renameAttendanceStaff, fetchActivityLog, updateProfileName, deleteMemberAccount,
+  fetchAttendance, insertAttendanceMany, updateAttendance, deleteAttendanceRow, deleteAttendanceMany, renameAttendanceStaff, fetchActivityLog, updateProfileName, deleteMemberAccount, undoActivity, undoActivities,
   fetchPending, insertPending, deletePendingRow,
 } from "./api";
 
@@ -5035,7 +5035,7 @@ function AdminTab({
   items, setItems, transactions, setTransactions,
   vendors, setVendors, events, setEvents, projects, setProjects,
   incoming = [], setIncoming, staff = [], setStaff,
-  attendance = [], setAttendance,
+  attendance = [], setAttendance, onReload,
 }) {
   const pendingUsers = users.filter((u) => u.status === "pending");
   const approvedUsers = users.filter((u) => u.status === "approved");
@@ -5072,6 +5072,14 @@ function AdminTab({
   const [logUser, setLogUser] = useState("");
   const [logTable, setLogTable] = useState("");
   const [logLimit, setLogLimit] = useState(60);
+  const [logFrom, setLogFrom] = useState("");
+  const [logTo, setLogTo] = useState("");
+  const [logNotice, setLogNotice] = useState("");
+  const [undoTarget, setUndoTarget] = useState(null); // { log, conflict }
+  const [bulkUndo, setBulkUndo] = useState(null); // 되돌릴 기록 목록
+  const kstDate = (ts) => { try { return new Date(ts).toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" }); } catch { return String(ts).slice(0, 10); } };
+  const isUndoable = (l) => !l.undone_at && l.record_id
+    && ((l.action === "INSERT" && l.new_data) || (l.action === "UPDATE" && l.old_data && l.new_data) || (l.action === "DELETE" && l.old_data));
   async function loadLogs() {
     setLogLoading(true);
     try { setLogs(await fetchActivityLog(500)); setLogError(false); } catch (err) { console.error(err); setLogError(true); }
@@ -5079,7 +5087,39 @@ function AdminTab({
   }
   useEffect(() => { loadLogs(); }, []);
   const logUsers = Array.from(new Set(logs.map((l) => l.username).filter(Boolean))).sort();
-  const filteredLogs = logs.filter((l) => (!logUser || l.username === logUser) && (!logTable || l.table_name === logTable));
+  const filteredLogs = logs.filter((l) => (!logUser || l.username === logUser) && (!logTable || l.table_name === logTable)
+    && (!logFrom || kstDate(l.created_at) >= logFrom) && (!logTo || kstDate(l.created_at) <= logTo));
+  const bulkCandidates = logUser ? filteredLogs.filter(isUndoable) : [];
+
+  async function refreshAfterUndo() {
+    await loadLogs();
+    if (onReload) await onReload();
+  }
+  async function runUndo(l, force) {
+    try {
+      const res = await undoActivity(l.id, force);
+      if (res === "ok") { setLogNotice("되돌렸습니다."); await refreshAfterUndo(); }
+      else if (res === "conflict" && !force) { setUndoTarget({ log: l, conflict: true }); return; }
+      else if (res === "conflict") { setLogNotice("이미 같은 항목이 다시 존재해서 되돌릴 수 없습니다."); }
+      else if (res === "missing") { setLogNotice("그 항목이 이후에 삭제되어 되돌릴 수 없습니다."); }
+      else if (res === "already") { setLogNotice("이미 되돌린 기록입니다."); await loadLogs(); }
+      else { setLogNotice("이 기록은 되돌릴 수 없습니다. (이전 값이 저장되어 있지 않음)"); }
+    } catch (err) {
+      setLogNotice(`되돌리기에 실패했습니다: ${err?.message || err}`);
+    }
+    setUndoTarget(null);
+  }
+  async function runBulkUndo() {
+    const ids = (bulkUndo || []).map((l) => l.id);
+    try {
+      const r = await undoActivities(ids);
+      setLogNotice(`${r.ok}건을 되돌렸습니다.${r.skipped ? ` ${r.skipped}건은 이후에 다시 바뀌어 건너뛰었습니다. (개별로 확인해주세요)` : ""}${r.other ? ` ${r.other}건은 되돌릴 수 없었습니다.` : ""}`);
+      await refreshAfterUndo();
+    } catch (err) {
+      setLogNotice(`일괄 되돌리기에 실패했습니다: ${err?.message || err}`);
+    }
+    setBulkUndo(null);
+  }
   const LOG_TABLE_LABEL = { items: "품목", transactions: "입출고", vendors: "거래처", events: "달력 일정", projects: "프로젝트", incoming_requests: "입고예정", staff: "직원", attendance: "출근기록" };
   const LOG_ACTION = {
     INSERT: { label: "등록", bg: "#E6F6EC", fg: "#15803D" },
@@ -5447,8 +5487,46 @@ function AdminTab({
             <option value="">전체 항목</option>
             {Object.keys(LOG_TABLE_LABEL).map((k) => <option key={k} value={k}>{LOG_TABLE_LABEL[k]}</option>)}
           </Select>
+          <TextInput type="date" value={logFrom} onChange={(e) => { setLogFrom(e.target.value); setLogLimit(60); }} title="시작일" style={{ padding: "5px 8px", fontSize: 12.5 }} />
+          <span style={{ fontSize: 12, color: "#8A93A6" }}>~</span>
+          <TextInput type="date" value={logTo} onChange={(e) => { setLogTo(e.target.value); setLogLimit(60); }} title="종료일" style={{ padding: "5px 8px", fontSize: 12.5 }} />
           <GhostButton onClick={loadLogs} style={{ padding: "6px 10px", fontSize: 12.5 }}><RefreshCw size={13} /> 새로고침</GhostButton>
         </div>
+        <div style={{ padding: "8px 18px", background: "#FAFBFC", borderBottom: "1px solid #EEF0F3", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12.5, color: "#6B7280" }}>
+          <span>회원을 선택하면 그 회원이 (선택한 기간에) 한 변경을 한꺼번에 되돌릴 수 있습니다.</span>
+          <div style={{ flex: 1 }} />
+          <GhostButton
+            disabled={bulkCandidates.length === 0}
+            onClick={() => setBulkUndo(bulkCandidates)}
+            style={{ padding: "6px 12px", fontSize: 12.5, borderColor: "#E63946", color: "#E63946", opacity: bulkCandidates.length === 0 ? 0.45 : 1 }}
+          >
+            선택한 조건 {bulkCandidates.length}건 되돌리기
+          </GhostButton>
+        </div>
+        {logNotice && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#EAF1FE", color: "#2554A8", padding: "8px 18px", fontSize: 12.5, fontWeight: 600 }}>
+            <span>{logNotice}</span>
+            <button onClick={() => setLogNotice("")} style={{ border: "none", background: "none", cursor: "pointer", color: "#2554A8" }}><X size={14} /></button>
+          </div>
+        )}
+        {undoTarget && (
+          <ConfirmDialog
+            text={undoTarget.conflict
+              ? `이 항목은 해당 변경 이후에 또 바뀌었습니다. 그래도 "${undoTarget.log.summary || ""}" 변경 이전 상태로 되돌릴까요? (그 뒤의 변경 내용은 사라집니다)`
+              : `"${undoTarget.log.summary || ""}" ${LOG_ACTION[undoTarget.log.action]?.label || ""} 변경을 되돌릴까요?`}
+            confirmLabel="되돌리기"
+            onConfirm={() => runUndo(undoTarget.log, !!undoTarget.conflict)}
+            onClose={() => setUndoTarget(null)}
+          />
+        )}
+        {bulkUndo && (
+          <ConfirmDialog
+            text={`${logUser}${logFrom || logTo ? ` (${logFrom || "처음"} ~ ${logTo || "현재"})` : ""}의 변경 ${bulkUndo.length}건을 최신 것부터 순서대로 되돌립니다. 이후에 다른 사람이 다시 바꾼 항목은 건너뜁니다. 진행할까요?`}
+            confirmLabel="일괄 되돌리기"
+            onConfirm={runBulkUndo}
+            onClose={() => setBulkUndo(null)}
+          />
+        )}
         {logError ? (
           <div style={{ padding: 24, textAlign: "center", color: "#E63946", fontSize: 13 }}>
             변경 기록을 불러오지 못했습니다. Supabase에서 supabase_schema_activity_log.sql을 실행했는지 확인해주세요.
@@ -5467,6 +5545,7 @@ function AdminTab({
                   <th style={{ padding: "9px 12px", textAlign: "left" }}>항목</th>
                   <th style={{ padding: "9px 12px", textAlign: "left" }}>작업</th>
                   <th style={{ padding: "9px 12px", textAlign: "left" }}>내용</th>
+                  <th style={{ padding: "9px 18px", textAlign: "right", whiteSpace: "nowrap" }}>되돌리기</th>
                 </tr>
               </thead>
               <tbody>
@@ -5480,7 +5559,16 @@ function AdminTab({
                       <td style={{ padding: "8px 12px" }}>
                         <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: act.bg, color: act.fg }}>{act.label}</span>
                       </td>
-                      <td style={{ padding: "8px 12px", color: "#374151" }}>{l.summary || "-"}</td>
+                      <td style={{ padding: "8px 12px", color: l.undone_at ? "#A2A9B8" : "#374151", textDecoration: l.undone_at ? "line-through" : "none" }}>{l.summary || "-"}</td>
+                      <td style={{ padding: "8px 18px", textAlign: "right", whiteSpace: "nowrap" }}>
+                        {l.undone_at ? (
+                          <span style={{ fontSize: 11.5, color: "#8A93A6" }}>되돌림 완료{l.undone_by ? ` (${l.undone_by})` : ""}</span>
+                        ) : isUndoable(l) ? (
+                          <button onClick={() => setUndoTarget({ log: l, conflict: false })} style={{ border: "1px solid #DADFE6", background: "#fff", color: "#14213D", borderRadius: 6, padding: "3px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>되돌리기</button>
+                        ) : (
+                          <span style={{ fontSize: 11.5, color: "#C0C6D2" }}>-</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -5557,8 +5645,8 @@ export default function App() {
     })();
   }, []);
 
-  async function loadAllData(role) {
-    setLoading(true);
+  async function loadAllData(role, silent = false) {
+    if (!silent) setLoading(true);
     const [i, t, v, e, pr, ic, st, p, att] = await Promise.all([
       fetchItems(),
       fetchTransactions(),
@@ -5585,7 +5673,7 @@ export default function App() {
     } else {
       setUsers([]);
     }
-    setLoading(false);
+    if (!silent) setLoading(false);
   }
 
   useEffect(() => {
@@ -5752,6 +5840,7 @@ export default function App() {
               incoming={incoming} setIncoming={setIncoming}
               staff={staff} setStaff={setStaff}
               attendance={attendance} setAttendance={setAttendance}
+              onReload={() => loadAllData(role, true)}
             />
           )}
         </div>

@@ -352,3 +352,17 @@ export async function deleteMemberAccount(id) {
   const { error } = await supabase.rpc("admin_delete_user", { target: id });
   if (error) throw error;
 }
+
+// ---------- 변경 되돌리기 (관리자) ----------
+// 결과: "ok" | "conflict"(이후에 또 바뀜) | "missing" | "already" | "unsupported"
+export async function undoActivity(id, force = false) {
+  const { data, error } = await supabase.rpc("undo_activity", { log_id: id, force });
+  if (error) throw error;
+  return data;
+}
+// 결과: { ok, skipped, other }
+export async function undoActivities(ids) {
+  const { data, error } = await supabase.rpc("undo_activities", { ids });
+  if (error) throw error;
+  return data;
+}
